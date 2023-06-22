@@ -18,7 +18,7 @@ mod ignore {
     });
 }
 
-crate::error_impl! {
+errorgen! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Error {
         BootExpired => None,

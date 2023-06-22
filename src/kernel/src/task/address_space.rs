@@ -6,7 +6,7 @@ use crate::mem::{
 use core::{num::NonZeroUsize, ptr::NonNull};
 use libsys::{page_size, Address, Page, Virtual};
 
-crate::error_impl! {
+errorgen! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     #[allow(clippy::enum_variant_names)]
     pub enum Error {

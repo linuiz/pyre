@@ -2,6 +2,8 @@ use crate::{interrupts::InterruptCell, mem::HHDM};
 use bitvec::slice::BitSlice;
 use core::{
     alloc::{AllocError, Allocator, Layout},
+    marker::PhantomData,
+    mem::size_of,
     num::{NonZeroU32, NonZeroUsize},
     ops::Range,
     ptr::NonNull,
@@ -44,28 +46,29 @@ pub fn get() -> PhysicalAllocator {
     PMM.get().expect("physical memory manager has not been initialized")
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Error {
-    /// There are not enough free frames to satisfy the request.
-    NoneFree,
-    /// Given alignment is invalid (e.g. not a power-of-two).
-    InvalidAlignment,
-    /// The provided frame index was out of bounds of the frame table.
-    OutOfBounds,
-    /// Attempted to lock a frame that wasn't free.
-    NotFree,
-    /// Attempted to free a frame that wasn't locked.
-    NotLocked,
+errorgen! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Error {
+        /// There are not enough free frames to satisfy the request.
+        NoneFree => None,
+        /// Given alignment is invalid (e.g. not a power-of-two).
+        InvalidAlignment => None,
+        /// The provided frame index was out of bounds of the frame table.
+        OutOfBounds => None,
+        /// Attempted to lock a frame that wasn't free.
+        NotFree => None,
+        /// Attempted to free a frame that wasn't locked.
+        NotLocked => None,
 
-    TypeMismatch,
+        TypeMismatch => None,
 
-    Unknown,
+        Unknown => None,
+    }
+
 }
 
-pub type Result<T> = core::result::Result<T, Error>;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FrameType {
+pub enum Kind {
     Unusable,
     Generic,
     Reserved,
@@ -73,8 +76,8 @@ pub enum FrameType {
     AcpiReclaim,
 }
 
-impl FrameType {
-    const fn from_u8(value: u8) -> Self {
+impl From<u8> for Kind {
+    fn from(value: u8) -> Self {
         match value {
             0 => Self::Unusable,
             1 => Self::Generic,
@@ -84,25 +87,21 @@ impl FrameType {
             _ => unimplemented!(),
         }
     }
+}
 
-    const fn as_u8(self) -> u8 {
-        match self {
-            FrameType::Unusable => 0,
-            FrameType::Generic => 1,
-            FrameType::Reserved => 2,
-            FrameType::BootReclaim => 3,
-            FrameType::AcpiReclaim => 4,
+impl From<Kind> for u8 {
+    fn from(value: Kind) -> Self {
+        match value {
+            Kind::Unusable => 0,
+            Kind::Generic => 1,
+            Kind::Reserved => 2,
+            Kind::BootReclaim => 3,
+            Kind::AcpiReclaim => 4,
         }
     }
 }
 
-struct RegionDescriptor {
-    ty: FrameType,
-    region: Range<usize>,
-}
-
 pub struct PhysicalMemoryManager<'a> {
-    // TODO map: Vec<RegionDescriptor, &'a FrameAllocator<'a>>,
     allocator: FrameAllocator<'a>,
 }
 
@@ -146,6 +145,85 @@ unsafe impl Allocator for &PhysicalMemoryManager<'_> {
             for index_offset in 0..frame_count {
                 self.free_frame(Address::from_index(address.index() + index_offset).unwrap()).ok();
             }
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
+struct RegionDescriptor {
+    metadata: usize,
+    start: usize,
+    end: usize,
+    _reserved: [u8; size_of::<usize>()],
+}
+
+#[repr(C)]
+struct RegionTable<const TABLE_LEN: usize> {
+    regions: [RegionDescriptor; TABLE_LEN],
+    len: usize,
+    next_table_ptr: Option<NonNull<Self>>,
+}
+
+impl<const TABLE_LEN: usize> RegionTable<TABLE_LEN> {
+    fn next_table(&self) -> Option<&Self> {
+        // Safety: If pointer is non-null, it's been allocated.
+        self.next_table_ptr.map(|ptr| unsafe { ptr.as_ref() })
+    }
+
+    fn next_table_mut(&mut self) -> Option<&mut Self> {
+        // Safety: If pointer is non-null, it's been allocated.
+        self.next_table_ptr.map(|mut ptr| unsafe { ptr.as_mut() })
+    }
+
+    fn descriptors(&self) -> &[RegionDescriptor] {
+        &self.regions[..self.len]
+    }
+
+    fn increment_len(&mut self) {
+        self.len = core::cmp::min(TABLE_LEN, self.len + 1);
+    }
+
+    pub fn insert(&mut self, new_region: RegionDescriptor) {
+        use core::cmp::Ordering;
+
+        let index = self
+            .descriptors()
+            .iter()
+            .position(|region| new_region.start >= region.end)
+            .map(|i| i + 1)
+            .filter(|i| *i <= self.len);
+
+        if let Some(index) = index {
+            // TODO error code for this
+            if index == TABLE_LEN && let Some(next_table) = self.next_table() {
+                assert!(new_region.end <= next_table.regions[0].start, "overlapping regions");
+            } else {
+                assert!(new_region.end <= self.regions[index + 1].start, "overlapping regions");
+            }
+
+            match index.cmp(&self.len) {
+                Ordering::Greater => unreachable!(),
+                Ordering::Equal => {} // Do nothing, we will insert at index for free
+                Ordering::Less => {
+                    if self.len == TABLE_LEN {
+                        // shuffle elements into next table
+                    }
+
+                    unsafe {
+                        let copy_from = self.regions.as_ptr().add(index);
+                        let copy_to = copy_from.add(1).cast_mut();
+                        let copy_count = self.len - index;
+
+                        core::ptr::copy(copy_from, copy_to, copy_count);
+                    }
+                }
+            }
+
+            self.regions[index] = new_region;
+            self.increment_len();
+        } else {
+            self.next_table_mut().map(|table| table.insert(new_region)).unwrap();
         }
     }
 }
@@ -217,6 +295,7 @@ impl FrameAllocator<'_> {
     pub fn next_frames(&self, count: NonZeroUsize, align_bits: Option<NonZeroU32>) -> Result<Address<Frame>> {
         let align_bits = align_bits.unwrap_or(NonZeroU32::MIN).get();
         let align_index_skip = u32::max(1, align_bits >> page_shift().get());
+
         self.table.with(|table| {
             let mut table = table.write();
             let index = table
@@ -238,12 +317,12 @@ impl FrameAllocator<'_> {
             let index = address.index();
 
             if index >= table.len() {
-                Err(Error::OutOfBounds)
-            } else {
-                table.set_aliased(index, true);
-
-                Ok(())
+                return Err(Error::OutOfBounds);
             }
+
+            table.set_aliased(index, true);
+
+            Ok(())
         })
     }
 
@@ -253,12 +332,12 @@ impl FrameAllocator<'_> {
             let index = address.index();
 
             if index >= table.len() {
-                Err(Error::OutOfBounds)
-            } else {
-                table.set_aliased(index, false);
-
-                Ok(())
+                return Err(Error::OutOfBounds);
             }
+
+            table.set_aliased(index, false);
+
+            Ok(())
         })
     }
 }

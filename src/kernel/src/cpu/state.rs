@@ -6,7 +6,7 @@ pub(self) const US_PER_SEC: u32 = 1000000;
 pub(self) const US_WAIT: u32 = 10000;
 pub(self) const US_FREQ_FACTOR: u32 = US_PER_SEC / US_WAIT;
 
-crate::error_impl! {
+errorgen! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Error {
         NotInitialized => None

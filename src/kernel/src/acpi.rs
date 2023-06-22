@@ -6,7 +6,7 @@ use acpi::PhysicalMapping;
 use port::{PortAddress, ReadWritePort};
 use spin::{Lazy, Mutex};
 
-crate::error_impl! {
+errorgen! {
     #[derive(Debug)]
     pub enum Error {
         Acpi { err: acpi::AcpiError } => None,

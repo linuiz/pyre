@@ -7,5 +7,6 @@ members = [
     "msr",
     "pic_8259",
     "port-rs",
-    "slab_alloc",
+    "pmm",
+    "error",
 ]

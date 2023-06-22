@@ -1,16 +1,13 @@
-mod hhdm;
-pub use hhdm::*;
-
 pub mod alloc;
 pub mod io;
 pub mod mapper;
 pub mod paging;
+pub mod vmm;
 
 use self::mapper::Mapper;
 use crate::interrupts::InterruptCell;
-
 use core::ptr::NonNull;
-use libsys::{table_index_size, Address, Frame};
+use libsys::{table_index_size, Address, Frame, Page, Virtual};
 use spin::{Lazy, Mutex};
 
 #[repr(align(0x10))]
@@ -33,6 +30,48 @@ impl<const SIZE: usize> core::ops::Deref for Stack<SIZE> {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+pub static HHDM: spin::Lazy<Hhdm> = spin::Lazy::new(|| {
+    #[limine::limine_tag]
+    static LIMINE_HHDM: limine::HhdmRequest = limine::HhdmRequest::new(crate::init::boot::LIMINE_REV);
+
+    let hhdm_address = LIMINE_HHDM
+        .get_response()
+        .expect("bootloader provided no higher-half direct mapping")
+        .offset()
+        .try_into()
+        .unwrap();
+
+    debug!("HHDM address: {:X?}", hhdm_address);
+
+    Hhdm(Address::<Page>::new(hhdm_address).unwrap())
+});
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hhdm(Address<Page>);
+
+impl Hhdm {
+    #[inline]
+    pub const fn page(self) -> Address<Page> {
+        self.0
+    }
+
+    #[inline]
+    pub fn address(self) -> Address<Virtual> {
+        self.0.get()
+    }
+
+    #[inline]
+    pub fn ptr(self) -> *mut u8 {
+        self.address().as_ptr()
+    }
+
+    #[inline]
+    pub fn offset(self, frame: Address<Frame>) -> Option<Address<Page>> {
+        self.address().get().checked_add(frame.get().get()).and_then(Address::new)
     }
 }
 
@@ -101,52 +140,3 @@ impl PagingRegister {
         self.0
     }
 }
-
-#[allow(clippy::module_name_repetitions)]
-pub unsafe fn out_of_memory() -> ! {
-    panic!("Kernel ran out of memory during initialization.")
-}
-
-// pub unsafe fn catch_read(ptr: NonNull<[u8]>) -> Result<Box<[u8]>, Exception> {
-//     let mem_range = ptr.as_uninit_slice().as_ptr_range();
-//     let aligned_start = libsys::align_down(mem_range.start.addr(), libsys::page_shift());
-//     let mem_end = mem_range.end.addr();
-
-//     let mut copied_mem = Box::new_uninit_slice(ptr.len());
-//     for (offset, page_addr) in (aligned_start..mem_end).enumerate().step_by(page_size()) {
-//         let ptr_addr = core::cmp::max(mem_range.start.addr(), page_addr);
-//         let ptr_len = core::cmp::min(mem_end.saturating_sub(ptr_addr), page_size());
-
-//         // Safety: Box slice and this iterator are bound by the ptr len.
-//         let to_ptr = unsafe { copied_mem.as_mut_ptr().add(offset) };
-//         // Safety: Copy is only invalid if the caller provided an invalid pointer.
-//         crate::local::do_catch(|| unsafe {
-//             core::ptr::copy_nonoverlapping(ptr_addr as *mut u8, to_ptr, ptr_len);
-//         })?;
-//     }
-
-//     Ok(copied_mem)
-// }
-
-// TODO TryString
-// pub unsafe fn catch_read_str(mut read_ptr: NonNull<u8>) -> Result<String, Exception> {
-//     let mut strlen = 0;
-//     'y: loop {
-//         let read_len = read_ptr.as_ptr().align_offset(page_size());
-//         read_ptr = NonNull::new(
-//             // Safety: This pointer isn't used without first being validated.
-//             unsafe { read_ptr.as_ptr().add(page_size() - read_len) },
-//         )
-//         .unwrap();
-
-//         for byte in catch_read(NonNull::slice_from_raw_parts(read_ptr, read_len))?.iter() {
-//             if byte.ne(&b'\0') {
-//                 strlen += 1;
-//             } else {
-//                 break 'y;
-//             }
-//         }
-//     }
-
-//     Ok(String::from_utf8_lossy(core::slice::from_raw_parts(read_ptr.as_ptr(), strlen)).into_owned())
-// }

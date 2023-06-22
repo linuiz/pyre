@@ -3,19 +3,16 @@ name = "kernel"
 version = "0.0.0"
 edition = "2021"
 
-[dependencies.port-rs]
-path = "../shared/port-rs/"
-[dependencies.msr]
-path = "../shared/msr/"
-[dependencies.apic]
-path = "../shared/apic/"
-[dependencies.libsys]
-path = "../shared/libsys/"
-[dependencies.libkernel]
-path = "../shared/libkernel/"
-
 
 [dependencies]
+# local crates
+port-rs = { path = "../shared/port-rs/" }
+msr = { path = "../shared/msr/" }
+apic = { path = "../shared/apic/" }
+libsys = { path = "../shared/libsys/" }
+libkernel = { path = "../shared/libkernel/" }
+error = { path = "../shared/error/" }
+# remote crates
 acpi = { git = "https://github.com/linuiz-project/acpi", default-features = false, features = [
     "allocator_api",
 ] }
