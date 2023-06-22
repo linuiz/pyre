@@ -8,7 +8,7 @@ pub mod boot;
 
 use libsys::Address;
 
-crate::error_impl! {
+errorgen! {
     #[derive(Debug)]
     pub enum Error {
         Memory { err: memory::Error } => Some(err)

@@ -17,9 +17,9 @@ pub use constants::*;
 // pub mod sync;
 pub mod syscall;
 
+extern crate alloc;
 #[macro_use]
 extern crate static_assertions;
-extern crate alloc;
 
 use core::num::NonZeroU32;
 

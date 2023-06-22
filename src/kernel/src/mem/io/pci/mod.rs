@@ -9,7 +9,7 @@ use libsys::{Address, Frame};
 use spin::Mutex;
 use uuid::Uuid;
 
-crate::error_impl! {
+errorgen! {
     #[derive(Debug)]
     pub enum Error {
         NoninitTables => None,

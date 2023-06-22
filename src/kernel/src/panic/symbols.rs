@@ -3,7 +3,7 @@ use core::ops::Range;
 use elf::{endian::AnyEndian, symbol::Symbol};
 use libsys::{Address, Virtual};
 
-crate::error_impl! {
+errorgen! {
     #[derive(Debug)]
     pub enum Error {
         ParserError { err: elf::ParseError } => Some(err),

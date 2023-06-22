@@ -1,6 +1,6 @@
 use libsys::{Address, Virtual};
 
-crate::error_impl! {
+errorgen! {
     /// Indicates what type of error the common page fault handler encountered.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Error {

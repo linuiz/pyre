@@ -31,7 +31,7 @@ pub fn segment_to_mmap_permissions(segment_ty: u32) -> MmapPermissions {
     }
 }
 
-crate::error_impl! {
+errorgen! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Error {
         AlreadyMapped => None,

@@ -82,6 +82,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2b183d6ce6ca4cf30e3db37abf5b52568b5f9015c97d9fbdd7026aa5dcdd758"
 
 [[package]]
+name = "error"
+version = "0.1.0"
+
+[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -108,6 +112,7 @@ dependencies = [
  "bitflags 2.3.2",
  "bitvec",
  "elf",
+ "error",
  "getrandom",
  "libkernel",
  "libsys",

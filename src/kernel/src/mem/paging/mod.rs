@@ -103,7 +103,7 @@ impl Step for TableDepth {
     }
 }
 
-crate::error_impl! {
+errorgen! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     #[allow(clippy::enum_variant_names)]
     pub enum Error {

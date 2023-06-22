@@ -63,14 +63,14 @@
 #![cfg_attr(target_arch = "x86_64", feature(abi_x86_interrupt))]
 
 extern crate alloc;
-
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate error;
 
 mod acpi;
 mod arch;
 mod cpu;
-mod error;
 mod init;
 mod interrupts;
 mod logging;

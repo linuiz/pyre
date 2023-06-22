@@ -2,7 +2,7 @@ use crate::mem::paging::{self, TableDepth, TableEntryFlags};
 use core::ops::Range;
 use libsys::{page_size, Address};
 
-crate::error_impl! {
+errorgen! {
     #[derive(Debug)]
     pub enum Error {
         KernelAddress => None,

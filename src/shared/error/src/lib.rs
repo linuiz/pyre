@@ -1,6 +1,10 @@
+#![no_std]
+#![feature(
+    error_in_core   // #103765 <https://github.com/rust-lang/rust/issues/103765>
+)]
+
 #[macro_export]
-#[allow(clippy::module_name_repetitions)]
-macro_rules! error_impl {
+macro_rules! errorgen {
     (
         $(#[$outer:meta])*
         $vis:vis enum $Error:ident {

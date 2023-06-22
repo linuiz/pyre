@@ -42,7 +42,7 @@ impl log::Log for Serial {
     fn flush(&self) {}
 }
 
-crate::error_impl! {
+errorgen! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Error {
         SetLogger => None,
