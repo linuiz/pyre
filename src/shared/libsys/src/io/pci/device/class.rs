@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Class {
     Unclassified(Unclassified),
     MassStorageController(MassStorageController),
@@ -85,13 +85,13 @@ impl Class {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Unclassified {
     NonVgaCompatible,
     VgaCompatible,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MassStorageController {
     Scsi,
     Ide(IdeController),
@@ -106,7 +106,7 @@ pub enum MassStorageController {
     Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum IdeController {
     IsaOnly,
     PciNativeOnly,
@@ -118,7 +118,7 @@ pub enum IdeController {
     PciFullSupport,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DisplayController {
     Vga,
     Xga,
@@ -126,7 +126,7 @@ pub enum DisplayController {
     Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Bridge {
     Host,
     Isa,
@@ -141,7 +141,7 @@ pub enum Bridge {
     Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Pci2PciBridge {
     NormalDecode,
     SubtractiveDecode,
@@ -149,7 +149,7 @@ pub enum Pci2PciBridge {
     SemiTransparentSecondaryBus,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RACEwayBridge {
     TransparentMode,
     EndpointMode,

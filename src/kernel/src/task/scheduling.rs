@@ -1,5 +1,5 @@
 use crate::{
-    mem::Stack,
+    mem::StackUnit,
     task::{Registers, State, Task},
 };
 use alloc::collections::VecDeque;
@@ -9,13 +9,13 @@ pub static PROCESSES: spin::Mutex<VecDeque<Task>> = spin::Mutex::new(VecDeque::n
 
 pub struct Scheduler {
     enabled: bool,
-    idle_stack: Stack<0x1000>,
+    idle_stack: [StackUnit; 0x1000],
     task: Option<Task>,
 }
 
 impl Scheduler {
     pub const fn new(enabled: bool) -> Self {
-        Self { enabled, idle_stack: Stack::new(), task: None }
+        Self { enabled, idle_stack: [StackUnit(0); 0x1000], task: None }
     }
 
     /// Enables the scheduler to pop tasks.
@@ -111,7 +111,7 @@ impl Scheduler {
         } else {
             *state = State::kernel(
                 Address::new(crate::interrupts::wait_loop as usize).unwrap(),
-                Address::new(self.idle_stack.top().addr().get()).unwrap(),
+                Address::from_ptr(self.idle_stack.as_ptr_range().end.cast_mut()),
             );
             *regs = Registers::default();
 

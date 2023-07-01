@@ -80,6 +80,18 @@ mod rand;
 mod task;
 mod time;
 
+pub const CORE_STACK_SIZE: u64 = {
+    #[cfg(debug_assertions)]
+    {
+        0x1000000
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        0x4000
+    }
+};
+
 /// ### Safety
 ///
 /// This function should only ever be called by the bootloader.

@@ -1,12 +1,12 @@
 mod class;
 pub use class::*;
 
+pub mod pci2pci;
 pub mod standard;
 
+use crate::{Address, LittleEndian, LittleEndianU16, LittleEndianU32, LittleEndianU8, Physical};
 use bit_field::BitField;
-use core::{fmt, marker::PhantomData, ptr::NonNull};
-use libkernel::{LittleEndian, LittleEndianU16, LittleEndianU32, LittleEndianU8};
-use libsys::{Address, Physical};
+use core::{fmt, marker::PhantomData, mem::size_of, ptr::NonNull};
 
 errorgen! {
     #[derive(Debug)]
@@ -98,6 +98,28 @@ impl Status {
     }
 }
 
+#[repr(usize)]
+enum Offset {
+    VendorId = 0x0,
+    DeviceId = 0x2,
+    Command = 0x4,
+    Status = 0x6,
+    RevisionId = 0x8,
+    ProgramInterface = 0x9,
+    Subclass = 0xA,
+    Class = 0xB,
+    CacheLineSize = 0xC,
+    LatencyTimer = 0xD,
+    HeaderType = 0xE,
+    BuiltinSelfTest = 0xF,
+}
+
+impl From<Offset> for usize {
+    fn from(value: Offset) -> Self {
+        value as usize
+    }
+}
+
 pub trait Kind {
     const REGISTER_COUNT: usize;
 }
@@ -107,112 +129,105 @@ impl Kind for Standard {
     const REGISTER_COUNT: usize = 6;
 }
 
-pub struct PCI2PCI;
-impl Kind for PCI2PCI {
+pub struct Pci2Pci;
+impl Kind for Pci2Pci {
     const REGISTER_COUNT: usize = 2;
 }
 
-pub struct PCI2CardBus;
-impl Kind for PCI2CardBus {
-    const REGISTER_COUNT: usize = 8;
-}
-
 #[derive(Debug)]
-pub enum Devices {
+pub enum DeviceKind {
     Standard(Device<Standard>),
-    PCI2PCI(Device<PCI2PCI>),
+    PCI2PCI(Device<Pci2Pci>),
 }
 
-pub struct Device<T: Kind>(NonNull<u8>, PhantomData<T>);
+pub struct Device<K: Kind>(NonNull<u8>, PhantomData<K>);
 
 // Safety: PCI MMIO (and so, the pointers used for it) utilize the global HHDM, and so can be sent between threads.
-unsafe impl<T: Kind> Send for Device<T> {}
+unsafe impl<K: Kind> Send for Device<K> {}
 
-/// Safety
+/// ### Safety
 ///
 /// Caller must ensure that the provided base pointer is a valid (and mapped) PCI MMIO header base.
-pub unsafe fn new(ptr: NonNull<u8>) -> Result<Devices> {
+pub unsafe fn new_device(ptr: NonNull<u8>) -> Result<DeviceKind> {
     let header_ty = unsafe { ptr.as_ptr().cast::<LittleEndianU8>().add(14).read_volatile() };
 
     match header_ty.get().get_bits(0..7) {
-        0x0 => Ok(Devices::Standard(Device::<Standard>(ptr, PhantomData))),
-        0x1 => Ok(Devices::PCI2PCI(Device(ptr, PhantomData))),
+        0x0 => Ok(DeviceKind::Standard(Device::<Standard>(ptr, PhantomData))),
+        0x1 => Ok(DeviceKind::PCI2PCI(Device(ptr, PhantomData))),
         0x2 => Err(Error::UnsupportedKind { raw: 0x2 }),
         raw => Err(Error::InvalidKind { raw }),
     }
 }
 
-impl<T: Kind> Device<T> {
+impl<K: Kind> Device<K> {
     const ROW_SIZE: usize = core::mem::size_of::<LittleEndianU32>();
 
-    unsafe fn read_offset<U: LittleEndian>(&self, offset: usize) -> U::NativeType {
-        self.0.as_ptr().add(offset).cast::<U>().read_volatile().get()
+    unsafe fn read_offset<O: Into<usize>, U: LittleEndian>(&self, offset: O) -> U::NativeType {
+        self.0.as_ptr().add(offset.into()).cast::<U>().read_volatile().get()
     }
 
-    unsafe fn write_offset<U: LittleEndian>(&mut self, offset: usize, value: U::NativeType) {
-        self.0.as_ptr().add(offset).cast::<U>().write_volatile(U::from(value));
+    unsafe fn write_offset<O: Into<usize>, U: LittleEndian>(&mut self, offset: O, value: U::NativeType) {
+        self.0.as_ptr().add(offset.into()).cast::<U>().write_volatile(U::from(value));
     }
 
-    pub fn get_vendor_id(&self) -> u16 {
-        unsafe { self.read_offset::<LittleEndianU16>(0) }
+    pub fn get_vendor_id(&self) -> Option<u16> {
+        match unsafe { self.read_offset::<_, LittleEndianU16>(Offset::VendorId) } {
+            0xFFFF => None,
+            value => Some(value),
+        }
     }
 
     pub fn get_device_id(&self) -> u16 {
-        unsafe { self.read_offset::<LittleEndianU16>(2) }
+        unsafe { self.read_offset::<_, LittleEndianU16>(Offset::DeviceId) }
     }
 
     pub fn get_command(&self) -> Command {
-        Command(unsafe { self.read_offset::<LittleEndianU16>(Self::ROW_SIZE) })
+        Command(unsafe { self.read_offset::<_, LittleEndianU16>(Self::ROW_SIZE) })
     }
 
     pub fn set_command(&mut self, command: Command) {
-        unsafe { self.write_offset::<LittleEndianU16>(Self::ROW_SIZE, command.0) }
+        unsafe { self.write_offset::<_, LittleEndianU16>(Self::ROW_SIZE, command.0) }
     }
 
     pub fn get_status(&self) -> Status {
-        Status::from_bits_retain(unsafe { self.read_offset::<LittleEndianU16>(Self::ROW_SIZE + 2) })
+        Status::from_bits_retain(unsafe { self.read_offset::<_, LittleEndianU16>(Offset::Status) })
     }
 
     pub fn get_revision_id(&self) -> u8 {
-        unsafe { self.read_offset::<LittleEndianU8>(2 * Self::ROW_SIZE) }
+        unsafe { self.read_offset::<_, LittleEndianU8>(Offset::RevisionId) }
     }
 
     pub fn get_class(&self) -> Class {
-        // Match format is:
-        //  0x  00      | 00        | 00
-        //      Class   | Subclass  | Program interface
-
-        let row_offset = 2 * Self::ROW_SIZE;
-        let class = unsafe { self.read_offset::<LittleEndianU8>(row_offset + 3) };
-        let subclass = unsafe { self.read_offset::<LittleEndianU8>(row_offset + 2) };
-        let prog_if = unsafe { self.read_offset::<LittleEndianU8>(row_offset + 1) };
+        let class = unsafe { self.read_offset::<_, LittleEndianU8>(Offset::Class) };
+        let subclass = unsafe { self.read_offset::<_, LittleEndianU8>(Offset::Subclass) };
+        let prog_if = unsafe { self.read_offset::<_, LittleEndianU8>(Offset::ProgramInterface) };
 
         Class::parse(class, subclass, prog_if)
     }
 
     pub fn get_cache_line_size(&self) -> u8 {
-        unsafe { self.read_offset::<LittleEndianU8>(3 * Self::ROW_SIZE) }
+        unsafe { self.read_offset::<_, LittleEndianU8>(Offset::CacheLineSize) }
     }
 
     pub fn get_latency_timer(&self) -> u8 {
-        unsafe { self.read_offset::<LittleEndianU8>((3 * Self::ROW_SIZE) + 1) }
+        unsafe { self.read_offset::<_, LittleEndianU8>(Offset::LatencyTimer) }
     }
 
     pub fn get_header_type(&self) -> u8 {
-        unsafe { self.read_offset::<LittleEndianU8>((3 * Self::ROW_SIZE) + 2) }.get_bits(0..7)
+        unsafe { self.read_offset::<_, LittleEndianU8>(Offset::HeaderType) }.get_bits(0..7)
     }
 
     pub fn get_multi_function(&self) -> bool {
-        unsafe { self.read_offset::<LittleEndianU8>((3 * Self::ROW_SIZE) + 2) }.get_bit(7)
+        unsafe { self.read_offset::<_, LittleEndianU8>(Offset::HeaderType) }.get_bit(7)
     }
 
     pub fn get_bar(&mut self, index: usize) -> Result<Bar> {
-        if index >= T::REGISTER_COUNT {
+        if index >= K::REGISTER_COUNT {
             return Err(Error::BarIndexOverflow { index });
         }
 
-        let bar_offset = (4 + index) * Self::ROW_SIZE;
-        let bar = unsafe { self.read_offset::<LittleEndianU32>(bar_offset) };
+        let bar_offset = 0x10 + (index * size_of::<LittleEndianU32>());
+        let bar = unsafe { self.read_offset::<_, LittleEndianU32>(bar_offset) };
 
         if bar.get_bit(0) {
             Ok(Bar::IOSpace { address: bar & !0b11, size: 0 })
@@ -221,9 +236,9 @@ impl<T: Kind> Device<T> {
                 0b00 => {
                     // Safety: See above about PCI spec.
                     let size = unsafe {
-                        self.write_offset::<LittleEndianU32>(bar_offset, u32::MAX);
-                        let size = !(self.read_offset::<LittleEndianU32>(bar_offset) & !0xF) + 1;
-                        self.write_offset::<LittleEndianU32>(bar_offset, bar);
+                        self.write_offset::<_, LittleEndianU32>(bar_offset, u32::MAX);
+                        let size = !(self.read_offset::<_, LittleEndianU32>(bar_offset) & !0xF) + 1;
+                        self.write_offset::<_, LittleEndianU32>(bar_offset, bar);
                         size
                     };
 
@@ -235,20 +250,20 @@ impl<T: Kind> Device<T> {
                 }
 
                 0b10 => {
-                    let high_bar_offset = bar_offset + Self::ROW_SIZE;
-                    let high_bar = unsafe { self.read_offset::<LittleEndianU32>(high_bar_offset) };
+                    let high_bar_offset = bar_offset + size_of::<LittleEndianU32>();
+                    let high_bar = unsafe { self.read_offset::<_, LittleEndianU32>(high_bar_offset) };
 
                     // Safety: See above about PCI spec.
                     let size = unsafe {
-                        self.write_offset::<LittleEndianU32>(bar_offset, u32::MAX);
-                        self.write_offset::<LittleEndianU32>(high_bar_offset, u32::MAX);
+                        self.write_offset::<_, LittleEndianU32>(bar_offset, u32::MAX);
+                        self.write_offset::<_, LittleEndianU32>(high_bar_offset, u32::MAX);
 
-                        let size_low = u64::from(self.read_offset::<LittleEndianU32>(bar_offset) & !0xF);
-                        let size_high = u64::from(self.read_offset::<LittleEndianU32>(high_bar_offset));
+                        let size_low = u64::from(self.read_offset::<_, LittleEndianU32>(bar_offset) & !0xF);
+                        let size_high = u64::from(self.read_offset::<_, LittleEndianU32>(high_bar_offset));
                         let size = ((size_high << 32) | size_low) + 1;
 
-                        self.write_offset::<LittleEndianU32>(bar_offset, bar);
-                        self.write_offset::<LittleEndianU32>(high_bar_offset, high_bar);
+                        self.write_offset::<_, LittleEndianU32>(bar_offset, bar);
+                        self.write_offset::<_, LittleEndianU32>(high_bar_offset, high_bar);
 
                         size
                     };
@@ -256,7 +271,7 @@ impl<T: Kind> Device<T> {
                     let address = (u64::from(high_bar) << 32) | (u64::from(bar) & !0xF);
 
                     Ok(Bar::MemorySpace64 {
-                        address: Address::new(usize::try_from(address).unwrap()).unwrap(),
+                        address: Address::new(address.try_into().unwrap()).unwrap(),
                         size,
                         prefetch: address.get_bit(3),
                     })
@@ -269,7 +284,7 @@ impl<T: Kind> Device<T> {
 
     pub fn generic_debug_fmt(&self, debug_struct: &mut fmt::DebugStruct) {
         debug_struct
-            .field("ID", &format_args!("{:4X}:{:4X}", self.get_vendor_id(), self.get_device_id()))
+            .field("ID", &format_args!("{:4X?}:{:4X}", self.get_vendor_id(), self.get_device_id()))
             .field("Command", &format_args!("{:?}", self.get_command()))
             .field("Status", &self.get_status())
             .field("Revision ID", &self.get_revision_id())
@@ -314,7 +329,7 @@ impl Bar {
     }
 }
 
-impl core::fmt::Debug for Device<PCI2PCI> {
+impl core::fmt::Debug for Device<Pci2Pci> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.debug_tuple("Not Implemented").finish()
     }

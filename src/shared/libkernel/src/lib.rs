@@ -6,9 +6,6 @@
 
 pub mod mem;
 
-mod num;
-pub use num::*;
-
 pub struct ReadOnly;
 pub struct WriteOnly;
 pub struct ReadWrite;

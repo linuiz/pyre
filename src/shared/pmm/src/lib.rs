@@ -232,11 +232,11 @@ impl Metadata for usize {}
 pub fn test_push() {
     use std::time::{Duration, Instant};
 
-    let mut table = RegionTable::<usize, 127>::default();
+    let mut table = RegionTable::<usize, 7>::default();
 
     let start = Instant::now();
 
-    const FACTOR: usize = 1000000000;
+    const FACTOR: usize = 1000000;
     for idx in 0..FACTOR {
         table.insert({
             let mut d = Region::default();

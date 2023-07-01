@@ -6,6 +6,7 @@ pub use params::*;
 
 pub mod boot;
 
+use core::sync::atomic::{AtomicBool, Ordering};
 use libsys::Address;
 
 errorgen! {
@@ -16,11 +17,11 @@ errorgen! {
 }
 
 pub static KERNEL_HANDLE: spin::Lazy<uuid::Uuid> = spin::Lazy::new(uuid::Uuid::new_v4);
+static MEM_READY: AtomicBool = AtomicBool::new(false);
+static SMP_READY: AtomicBool = AtomicBool::new(false);
 
 #[allow(clippy::too_many_lines)]
 pub unsafe extern "C" fn init() -> ! {
-    use core::sync::atomic::{AtomicBool, Ordering};
-
     #[limine::limine_tag]
     static LIMINE_KERNEL_FILE: limine::KernelFileRequest = limine::KernelFileRequest::new(boot::LIMINE_REV);
 
@@ -38,17 +39,24 @@ pub unsafe extern "C" fn init() -> ! {
         .expect("bootloader did not respond to kernel file request");
 
     params::parse(kernel_file.cmdline());
+
+    // Setup SMP early to ensure the cores are parked in mapped regions.
+    setup_smp();
+
     crate::mem::alloc::pmm::init(boot::get_memory_map().unwrap()).unwrap();
     crate::panic::symbols::parse(kernel_file).unwrap();
     memory::setup(kernel_file).unwrap();
 
+    MEM_READY.store(true, Ordering::Relaxed);
+
     crate::acpi::init_interface().unwrap();
 
-    crate::mem::io::pci::init_devices().unwrap();
+    crate::mem::pcie::init_devices().unwrap();
 
     load_drivers();
-
-    setup_smp();
+    loop {}
+    // SMP should be ready now, so other cores can continue.
+    SMP_READY.store(true, Ordering::Relaxed);
 
     crate::init::boot::reclaim_memory().unwrap();
 
@@ -59,6 +67,10 @@ pub unsafe extern "C" fn init() -> ! {
 ///
 /// This function should only ever be called once per core.
 pub(self) unsafe fn kernel_core_setup() -> ! {
+    while !SMP_READY.load(Ordering::Relaxed) {
+        core::hint::spin_loop();
+    }
+
     crate::cpu::state::init(1000);
 
     // Ensure we enable interrupts prior to enabling the scheduler.
@@ -212,14 +224,42 @@ fn setup_smp() {
                 trace!("Starting processor: ID P{}/L{}", cpu_info.processor_id(), cpu_info.lapic_id());
 
                 if params::get().smp {
-                    extern "C" fn _smp_entry(_: &limine::CpuInfo) -> ! {
+                    extern "C" fn _smp_entry(info: &limine::CpuInfo) -> ! {
                         arch::cpu_setup();
 
-                        // Safety: All currently referenced memory should also be mapped in the kernel page tables.
-                        crate::mem::with_kmapper(|kmapper| unsafe { kmapper.swap_into() });
+                        while !MEM_READY.load(Ordering::Relaxed) {
+                            core::hint::spin_loop();
+                        }
 
-                        // Safety: Function is called only once for this core.
-                        unsafe { kernel_core_setup() }
+                        #[allow(clippy::cast_possible_truncation)]
+                        {
+                            use crate::mem::StackUnit;
+                            use alloc::boxed::Box;
+
+                            // Safety: All currently referenced memory should also be mapped in the kernel page tables.
+                            crate::mem::with_kmapper(|kmapper| unsafe { kmapper.swap_into() });
+
+                            info!("Core {} is allocating fresh stack...", info.lapic_id());
+                            let stack: Box<[core::mem::MaybeUninit<StackUnit>]> =
+                                Box::new_uninit_slice(crate::CORE_STACK_SIZE as usize);
+                            let stack_top = stack.as_ptr_range().end;
+                            info!("Core {} allocated fresh stack: @{:X?}", info.lapic_id(), stack_top);
+
+                            Box::leak(stack);
+
+                            // Safety: Memory will have been just allocated.
+                            unsafe {
+                                core::arch::asm!(
+                                    "
+                                    mov rsp, {}
+                                    call {}
+                                    ",
+                                    in(reg) stack_top,
+                                    sym kernel_core_setup,
+                                    options(nomem, nostack, noreturn)
+                                )
+                            }
+                        }
                     }
 
                     // If smp is enabled, jump to the smp entry function.

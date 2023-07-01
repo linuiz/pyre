@@ -5,17 +5,8 @@ mod ignore {
     ///! This module is never exported. It is used for bootloader requests that should never be accessed in software.
 
     #[limine::limine_tag]
-    static LIMINE_STACK: limine::StackSizeRequest = limine::StackSizeRequest::new(super::LIMINE_REV).stack_size({
-        #[cfg(debug_assertions)]
-        {
-            0x1000000
-        }
-
-        #[cfg(not(debug_assertions))]
-        {
-            0x4000
-        }
-    });
+    static LIMINE_STACK: limine::StackSizeRequest =
+        limine::StackSizeRequest::new(super::LIMINE_REV).stack_size(crate::CORE_STACK_SIZE);
 }
 
 errorgen! {
