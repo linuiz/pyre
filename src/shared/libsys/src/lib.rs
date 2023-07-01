@@ -1,5 +1,6 @@
 #![no_std]
 #![feature(
+    error_in_core,              // #103765 <https://github.com/rust-lang/rust/issues/103765>
     strict_provenance,          // #95228 <https://github.com/rust-lang/rust/issues/95228>
     try_trait_v2,               // #84277 <https://github.com/rust-lang/rust/issues/84277>
     exclusive_range_pattern,    // #37854 <https://github.com/rust-lang/rust/issues/37854>
@@ -14,12 +15,18 @@ pub use address::*;
 mod constants;
 pub use constants::*;
 
+mod little_endian;
+pub use little_endian::*;
+
 // pub mod sync;
+pub mod io;
 pub mod syscall;
 
 extern crate alloc;
 #[macro_use]
 extern crate static_assertions;
+#[macro_use]
+extern crate error;
 
 use core::num::NonZeroU32;
 

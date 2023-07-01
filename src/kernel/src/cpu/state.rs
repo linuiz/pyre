@@ -69,22 +69,29 @@ pub unsafe fn init(timer_frequency: u16) {
         use ia32utils::VirtAddr;
 
         fn allocate_tss_stack() -> VirtAddr {
-            use crate::mem::Stack;
-
             const TSS_STACK_SIZE: NonZeroUsize = NonZeroUsize::new(0x16000).unwrap();
 
-            VirtAddr::from_ptr(Box::leak(Box::new(Stack::<{ TSS_STACK_SIZE.get() }>::new())).as_ptr_range().end)
+            let stack: Box<[core::mem::MaybeUninit<u8>]> = Box::new_uninit_slice(TSS_STACK_SIZE.get());
+            VirtAddr::from_ptr(Box::leak(stack).as_ptr_range().end)
         }
 
+        info!("1");
         let mut tss = Box::new(tss::TaskStateSegment::new());
+        info!("1");
         // TODO guard pages for these stacks
         tss.privilege_stack_table[0] = allocate_tss_stack();
+        info!("2");
         tss.interrupt_stack_table[StackTableIndex::Debug as usize] = allocate_tss_stack();
+        info!("3");
         tss.interrupt_stack_table[StackTableIndex::NonMaskable as usize] = allocate_tss_stack();
+        info!("4");
         tss.interrupt_stack_table[StackTableIndex::DoubleFault as usize] = allocate_tss_stack();
+        info!("5");
         tss.interrupt_stack_table[StackTableIndex::MachineCheck as usize] = allocate_tss_stack();
+        info!("6");
 
-        tss::load_local(tss::ptr_as_descriptor(NonNull::new(&mut *tss).unwrap()));
+        tss::load_local(tss::ptr_as_descriptor(NonNull::new(tss.as_mut()).unwrap()));
+        info!("7");
 
         tss
     };

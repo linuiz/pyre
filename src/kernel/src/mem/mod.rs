@@ -1,37 +1,17 @@
 pub mod alloc;
-pub mod io;
 pub mod mapper;
 pub mod paging;
+pub mod pcie;
 pub mod vmm;
 
 use self::mapper::Mapper;
 use crate::interrupts::InterruptCell;
-use core::ptr::NonNull;
 use libsys::{table_index_size, Address, Frame, Page, Virtual};
 use spin::{Lazy, Mutex};
 
 #[repr(align(0x10))]
-pub struct Stack<const SIZE: usize>([u8; SIZE]);
-
-impl<const SIZE: usize> Stack<SIZE> {
-    #[inline]
-    pub const fn new() -> Self {
-        Self([0u8; SIZE])
-    }
-
-    pub fn top(&self) -> NonNull<u8> {
-        // Safety: Pointer is valid for the length of the slice.
-        NonNull::new(unsafe { self.0.as_ptr().add(self.0.len()).cast_mut() }).unwrap()
-    }
-}
-
-impl<const SIZE: usize> core::ops::Deref for Stack<SIZE> {
-    type Target = [u8; SIZE];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct StackUnit(pub u8);
 
 pub static HHDM: spin::Lazy<Hhdm> = spin::Lazy::new(|| {
     #[limine::limine_tag]

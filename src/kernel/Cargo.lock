@@ -153,6 +153,9 @@ dependencies = [
 name = "libsys"
 version = "0.1.0"
 dependencies = [
+ "bit_field",
+ "bitflags 2.3.2",
+ "error",
  "log",
  "num_enum",
  "static_assertions",

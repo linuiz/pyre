@@ -1,11 +1,10 @@
-mod device;
-pub use device::*;
-
 use crate::mem::{alloc::pmm, paging, HHDM};
 use alloc::{collections::BTreeMap, vec::Vec};
 use core::ptr::NonNull;
-use libkernel::{LittleEndian, LittleEndianU16};
-use libsys::{Address, Frame};
+use libsys::{
+    io::pci::{Class, Device, DeviceKind, Standard},
+    Address, Frame, LittleEndian, LittleEndianU16,
+};
 use spin::Mutex;
 use uuid::Uuid;
 
@@ -13,13 +12,17 @@ errorgen! {
     #[derive(Debug)]
     pub enum Error {
         NoninitTables => None,
-        AcpiError { err: acpi::AcpiError } => None,
+        Acpi { err: acpi::AcpiError } => None,
         Paging { err: paging::Error } => Some(err)
     }
 }
 
-static PCI_DEVICES: Mutex<Vec<Device<Standard>>> = Mutex::new(Vec::new());
-static OWNED_DEVICES: Mutex<BTreeMap<Uuid, Device<Standard>>> = Mutex::new(BTreeMap::new());
+enum Ownership {
+    Available,
+    Owned(Uuid),
+}
+
+static DEVICES: Mutex<BTreeMap<Class, Vec<(Ownership, Device<Standard>)>>> = Mutex::new(BTreeMap::new());
 
 pub fn get_device_base_address(base: usize, bus_index: u8, device_index: u8) -> Address<Frame> {
     let bus_index = usize::from(bus_index);
@@ -29,10 +32,10 @@ pub fn get_device_base_address(base: usize, bus_index: u8, device_index: u8) -> 
 }
 
 pub fn init_devices() -> Result<()> {
-    let mut devices = PCI_DEVICES.lock();
+    let mut devices = DEVICES.lock();
 
     let acpi_tables = crate::acpi::TABLES.get().ok_or(Error::NoninitTables)?.lock();
-    let pci_regions = acpi::PciConfigRegions::new(&acpi_tables, pmm::get()).map_err(|err| Error::AcpiError { err })?;
+    let pci_regions = acpi::PciConfigRegions::new(&acpi_tables, pmm::get()).map_err(|err| Error::Acpi { err })?;
 
     pci_regions
         .iter()
@@ -56,10 +59,15 @@ pub fn init_devices() -> Result<()> {
                 );
 
                 // Safety: Base pointer, at this point, has been verified as known-good.
-                match unsafe { new(NonNull::new(device_page.as_ptr()).unwrap()) } {
-                    Ok(Devices::Standard(device)) => {
+                let device = unsafe { libsys::io::pci::new_device(NonNull::new(device_page.as_ptr()).unwrap()) };
+
+                #[allow(clippy::single_match)]
+                match device {
+                    Ok(DeviceKind::Standard(device)) => {
                         trace!("{:#?}", device);
-                        devices.push(device);
+
+                        let class_devices = devices.entry(device.get_class()).or_insert(Vec::new());
+                        class_devices.push((Ownership::Available, device));
                     }
 
                     // TODO handle PCI-to-PCI busses
