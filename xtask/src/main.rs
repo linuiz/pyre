@@ -199,7 +199,6 @@ fn download_ovmf_binaries(sh: &Shell, tmp_dir: &TempDir) -> Result<()> {
     for entry in archive.entries()? {
         let mut entry = entry?;
         let path = entry.path()?.to_string_lossy().into_owned();
-        println!("Checking path for EFI binaries: {:?}", path);
 
         if path.ends_with("x64/code.fd") {
             entry.unpack(X86_64_CODE)?;

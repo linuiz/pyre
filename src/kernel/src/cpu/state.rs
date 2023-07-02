@@ -1,6 +1,6 @@
 use crate::{interrupts::exceptions::Exception, interrupts::InterruptCell, task::Scheduler};
 use alloc::boxed::Box;
-use core::{cell::UnsafeCell, num::NonZeroU64, ptr::NonNull, sync::atomic::AtomicBool};
+use core::{cell::UnsafeCell, num::NonZeroU64, ptr::NonNull, sync::atomic::AtomicBool, time::Duration};
 
 pub(self) const US_PER_SEC: u32 = 1000000;
 pub(self) const US_WAIT: u32 = 10000;
@@ -75,23 +75,16 @@ pub unsafe fn init(timer_frequency: u16) {
             VirtAddr::from_ptr(Box::leak(stack).as_ptr_range().end)
         }
 
-        info!("1");
         let mut tss = Box::new(tss::TaskStateSegment::new());
-        info!("1");
+
         // TODO guard pages for these stacks
         tss.privilege_stack_table[0] = allocate_tss_stack();
-        info!("2");
         tss.interrupt_stack_table[StackTableIndex::Debug as usize] = allocate_tss_stack();
-        info!("3");
         tss.interrupt_stack_table[StackTableIndex::NonMaskable as usize] = allocate_tss_stack();
-        info!("4");
         tss.interrupt_stack_table[StackTableIndex::DoubleFault as usize] = allocate_tss_stack();
-        info!("5");
         tss.interrupt_stack_table[StackTableIndex::MachineCheck as usize] = allocate_tss_stack();
-        info!("6");
 
         tss::load_local(tss::ptr_as_descriptor(NonNull::new(tss.as_mut()).unwrap()));
-        info!("7");
 
         tss
     };
@@ -142,7 +135,7 @@ pub unsafe fn init(timer_frequency: u16) {
                     apic.get_timer().set_masked(true);
 
                     let start_tsc = core::arch::x86_64::_rdtsc();
-                    crate::time::SYSTEM_CLOCK.spin_wait_us(US_WAIT);
+                    crate::time::clock::SYSTEM.spin_wait(Duration::from_millis(10));
                     let end_tsc = core::arch::x86_64::_rdtsc();
 
                     (end_tsc - start_tsc) * u64::from(US_FREQ_FACTOR)
@@ -161,7 +154,7 @@ pub unsafe fn init(timer_frequency: u16) {
 
             let frequency = {
                 apic.set_timer_initial_count(u32::MAX);
-                crate::time::SYSTEM_CLOCK.spin_wait_us(US_WAIT);
+                crate::time::clock::SYSTEM.spin_wait(Duration::from_millis(10));
                 let timer_count = apic.get_timer_current_count();
 
                 (u32::MAX - timer_count) * US_FREQ_FACTOR

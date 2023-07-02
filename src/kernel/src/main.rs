@@ -1,8 +1,10 @@
+// TODO package details
 #![no_std]
 #![no_main]
 #![feature(
     error_in_core,                          // #103765 <https://github.com/rust-lang/rust/issues/103765>
     result_flattening,                      // #70142 <https://github.com/rust-lang/rust/issues/70142>
+    duration_constants,                     // #57391 <https://github.com/rust-lang/rust/issues/57391>
     iter_advance_by,                        // #77404 <https://github.com/rust-lang/rust/issues/77404>
     iter_array_chunks,                      // #100450 <https://github.com/rust-lang/rust/issues/100450>
     iter_next_chunk,                        // #98326 <https://github.com/rust-lang/rust/issues/98326>
@@ -105,7 +107,7 @@ unsafe extern "C" fn _entry() -> ! {
 
         call {}
         ",
-        sym init::init,
+        sym init::_init,
         options(noreturn)
     )
 }

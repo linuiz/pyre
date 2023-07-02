@@ -1,3 +1,5 @@
+use core::ops::{Div, Rem};
+
 use crate::interrupts::InterruptCell;
 use spin::Mutex;
 use uart::{Data, Uart, UartWriter};
@@ -18,21 +20,21 @@ impl log::Log for Serial {
 
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
-            // TODO tell the time
-            let ticks = 1;
-            let whole_time = ticks / 1000;
-            let frac_time = ticks % 1000;
+            let cpu = crate::cpu::read_id();
+
+            let now = crate::time::clock::Instant::now();
+            let secs = now.as_secs();
+            let millis = now.as_millis() - (secs * 1000);
+
             self.0.with(|uart| {
                 use core::fmt::Write;
 
                 let mut uart = uart.lock();
 
                 uart.write_fmt(format_args!(
-                    "[{whole_time:wwidth$}.{frac_time:0fwidth$}][{level}] {args}\n",
+                    "[{cpu:>3}][{secs}.{millis:0<3}][{level:>5}] {args}\n",
                     level = record.level(),
                     args = record.args(),
-                    wwidth = 4,
-                    fwidth = 3
                 ))
                 .unwrap();
             });

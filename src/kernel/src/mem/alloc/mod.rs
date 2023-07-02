@@ -1,3 +1,4 @@
+pub mod eternal;
 pub mod pmm;
 
 use alloc::alloc::Global;
