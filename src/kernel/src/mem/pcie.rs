@@ -34,8 +34,8 @@ pub fn get_device_base_address(base: usize, bus_index: u8, device_index: u8) -> 
 pub fn init_devices() -> Result<()> {
     let mut devices = DEVICES.lock();
 
-    let acpi_tables = crate::acpi::TABLES.get().ok_or(Error::NoninitTables)?.lock();
-    let pci_regions = acpi::PciConfigRegions::new(&acpi_tables, pmm::get()).map_err(|err| Error::Acpi { err })?;
+    let acpi_tables = crate::acpi::get_tables();
+    let pci_regions = acpi::PciConfigRegions::new(acpi_tables, pmm::get()).map_err(|err| Error::Acpi { err })?;
 
     pci_regions
         .iter()

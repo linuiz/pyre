@@ -67,19 +67,22 @@ fn stack_trace() {
     };
 
     // Safety: Frame pointer is pulled directly from the frame pointer register.
-    let stack_tracer = unsafe { StackTracer::new(NonNull::new(frame_ptr.cast_mut()).unwrap()) };
-    for (depth, trace_address) in stack_tracer.enumerate() {
-        const SYMBOL_TYPE_FUNCTION: u8 = 2;
+    if let Some(stack_tracer) = NonNull::new(frame_ptr.cast_mut()).map(|ptr| unsafe { StackTracer::new(ptr) }) {
+        for (depth, trace_address) in stack_tracer.enumerate() {
+            const SYMBOL_TYPE_FUNCTION: u8 = 2;
 
-        if let Some((_, Some(symbol_name))) = symbols::get(trace_address) {
-            if let Ok(demangled) = rustc_demangle::try_demangle(symbol_name) {
-                print_stack_trace_entry(depth, trace_address, demangled);
+            if let Some((_, Some(symbol_name))) = symbols::get(trace_address) {
+                if let Ok(demangled) = rustc_demangle::try_demangle(symbol_name) {
+                    print_stack_trace_entry(depth, trace_address, demangled);
+                } else {
+                    print_stack_trace_entry(depth, trace_address, symbol_name);
+                }
             } else {
-                print_stack_trace_entry(depth, trace_address, symbol_name);
+                print_stack_trace_entry(depth, trace_address, "!!! no function found !!!");
             }
-        } else {
-            print_stack_trace_entry(depth, trace_address, "!!! no function found !!!");
         }
+    } else {
+        error!("No base pointer; stack trace empty.");
     }
 
     error!("----------STACK-TRACE----------");

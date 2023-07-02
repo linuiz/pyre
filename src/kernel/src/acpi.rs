@@ -1,10 +1,7 @@
-use crate::mem::{
-    alloc::{KernelAllocator, KMALLOC},
-    HHDM,
-};
+use crate::mem::HHDM;
 use acpi::PhysicalMapping;
 use port::{PortAddress, ReadWritePort};
-use spin::{Lazy, Mutex};
+use spin::Once;
 
 errorgen! {
     #[derive(Debug)]
@@ -165,40 +162,76 @@ impl acpi::AcpiHandler for AcpiHandler {
 //     }
 // }
 
-pub static TABLES: spin::Once<Mutex<acpi::AcpiTables<AcpiHandler>>> = spin::Once::new();
+type Tables = acpi::AcpiTables<AcpiHandler>;
+struct TablesWrapper(Tables);
+
+// Safety: ACPI memory is kept in the HHDM.
+unsafe impl Sync for TablesWrapper {}
+impl core::ops::Deref for TablesWrapper {
+    type Target = Tables;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+type Fadt = PhysicalMapping<AcpiHandler, acpi::fadt::Fadt>;
+struct FadtWrapper(Fadt);
+
+// Safety: ACPI memory is kept in the HHDM.
+unsafe impl Sync for FadtWrapper {}
+impl core::ops::Deref for FadtWrapper {
+    type Target = Fadt;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+type Mcfg = PhysicalMapping<AcpiHandler, acpi::mcfg::Mcfg>;
+struct McfgWrapper(Mcfg);
+
+// Safety: ACPI memory is kept in the HHDM.
+unsafe impl Sync for McfgWrapper {}
+impl core::ops::Deref for McfgWrapper {
+    type Target = Mcfg;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+static TABLES: spin::Once<TablesWrapper> = spin::Once::new();
+static FADT: Once<FadtWrapper> = Once::new();
+static MCFG: Once<McfgWrapper> = Once::new();
 
 pub fn init_interface() -> Result<()> {
-    debug!("Initializing ACPI interface...");
-
     TABLES.try_call_once(|| {
         let rsdp_address = crate::init::boot::get_rsdp_address().map_err(|err| Error::Boot { err })?;
         // Safety: Bootloader guarantees any address provided for RDSP will be valid.
-        let acpi_tables = unsafe { acpi::AcpiTables::from_rsdp(AcpiHandler, rsdp_address.get()) }
+        let tables = unsafe { acpi::AcpiTables::from_rsdp(AcpiHandler, rsdp_address.get()) }
+            .map_err(|err| Error::Acpi { err })?;
+        FADT.try_call_once(|| tables.find_table::<acpi::fadt::Fadt>().map(FadtWrapper))
+            .map_err(|err| Error::Acpi { err })?;
+        MCFG.try_call_once(|| tables.find_table::<acpi::mcfg::Mcfg>().map(McfgWrapper))
             .map_err(|err| Error::Acpi { err })?;
 
-        Ok(Mutex::new(acpi_tables))
+        Ok(TablesWrapper(tables))
     })?;
-
-    debug!("Initialized ACPI interface.");
 
     Ok(())
 }
 
-pub static FADT: Lazy<Option<Mutex<PhysicalMapping<AcpiHandler, acpi::fadt::Fadt>>>> = Lazy::new(|| {
-    TABLES.get().map(Mutex::lock).and_then(|tables| tables.find_table::<acpi::fadt::Fadt>().ok()).map(Mutex::new)
-});
+pub fn get_tables() -> &'static Tables {
+    TABLES.get().expect("ACPI Tables have not been initialized")
+}
 
-pub static MCFG: Lazy<Option<Mutex<PhysicalMapping<AcpiHandler, acpi::mcfg::Mcfg>>>> = Lazy::new(|| {
-    TABLES.get().map(Mutex::lock).and_then(|tables| tables.find_table::<acpi::mcfg::Mcfg>().ok()).map(Mutex::new)
-});
+pub fn get_fadt() -> &'static Fadt {
+    FADT.get().expect("FADT has not been initialized")
+}
 
-pub static PLATFORM_INFO: Lazy<Option<Mutex<acpi::PlatformInfo<&'static KernelAllocator>>>> = Lazy::new(|| {
-    TABLES
-        .get()
-        .map(Mutex::lock)
-        .and_then(|tables| acpi::PlatformInfo::new_in(&*tables, &*KMALLOC).ok())
-        .map(Mutex::new)
-});
+pub fn get_mcfg() -> &'static Mcfg {
+    MCFG.get().expect("MCFG has not been initialized")
+}
 
 // struct AmlContextWrapper(aml::AmlContext);
 // // Safety: TODO

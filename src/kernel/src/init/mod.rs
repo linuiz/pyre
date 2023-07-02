@@ -6,8 +6,10 @@ pub use params::*;
 
 pub mod boot;
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use libsys::Address;
+
+use crate::time::clock::Instant;
 
 errorgen! {
     #[derive(Debug)]
@@ -18,20 +20,24 @@ errorgen! {
 
 pub static KERNEL_HANDLE: spin::Lazy<uuid::Uuid> = spin::Lazy::new(uuid::Uuid::new_v4);
 static MEM_READY: AtomicBool = AtomicBool::new(false);
-static SMP_READY: AtomicBool = AtomicBool::new(false);
 
+static SMP_COUNT: spin::Once<u32> = spin::Once::new();
+static SMP_READY: AtomicU32 = AtomicU32::new(0);
+
+#[doc(hidden)]
 #[allow(clippy::too_many_lines)]
-pub unsafe extern "C" fn init() -> ! {
-    #[limine::limine_tag]
-    static LIMINE_KERNEL_FILE: limine::KernelFileRequest = limine::KernelFileRequest::new(boot::LIMINE_REV);
-
-    static INIT: AtomicBool = AtomicBool::new(false);
-    assert!(!INIT.load(Ordering::Acquire), "`init()` has already been called!");
-    INIT.store(true, Ordering::Release);
+pub(super) unsafe extern "C" fn _init() -> ! {
+    crate::acpi::init_interface().unwrap();
+    crate::time::clock::set_initial_timestamp();
 
     setup_logging();
+    debug!("Logging successfully setup.");
+
     arch::cpu_setup();
     print_boot_info();
+
+    #[limine::limine_tag]
+    static LIMINE_KERNEL_FILE: limine::KernelFileRequest = limine::KernelFileRequest::new(boot::LIMINE_REV);
 
     let kernel_file = LIMINE_KERNEL_FILE
         .get_response()
@@ -49,26 +55,26 @@ pub unsafe extern "C" fn init() -> ! {
 
     MEM_READY.store(true, Ordering::Relaxed);
 
-    crate::acpi::init_interface().unwrap();
-
     crate::mem::pcie::init_devices().unwrap();
 
     load_drivers();
-    loop {}
-    // SMP should be ready now, so other cores can continue.
-    SMP_READY.store(true, Ordering::Relaxed);
 
-    crate::init::boot::reclaim_memory().unwrap();
-
-    kernel_core_setup()
+    kernel_core_setup(true)
 }
 
 /// ### Safety
 ///
 /// This function should only ever be called once per core.
-pub(self) unsafe fn kernel_core_setup() -> ! {
-    while !SMP_READY.load(Ordering::Relaxed) {
+pub(self) unsafe extern "sysv64" fn kernel_core_setup(is_bsp: bool) -> ! {
+    SMP_READY.fetch_add(1, Ordering::Relaxed);
+
+    let smp_count = *SMP_COUNT.get().unwrap();
+    while SMP_READY.load(Ordering::Relaxed) < smp_count {
         core::hint::spin_loop();
+    }
+
+    if is_bsp {
+        crate::init::boot::reclaim_memory().unwrap();
     }
 
     crate::cpu::state::init(1000);
@@ -82,11 +88,20 @@ pub(self) unsafe fn kernel_core_setup() -> ! {
 }
 
 fn setup_logging() {
-    if cfg!(debug_assertions) {
-        // Logging isn't set up, so we'll just spin loop if we fail to initialize it.
-        crate::logging::init().unwrap_or_else(|_| crate::interrupts::wait_loop());
-    } else {
-        // Logging failed to initialize, but just continue to boot (only in release).
+    #[cfg(debug_assertions)]
+    {
+        crate::logging::init().unwrap_or_else(|_| {
+            // Logging isn't set up, so we just fucking die.
+
+            #[cfg(target_arch = "x86_64")]
+            {
+                crate::arch::x86_64::instructions::breakpoint();
+            }
+        });
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        // If logging fails to initialize in release we don't care (hopefully GUI works).
         crate::logging::init().ok();
     }
 }
@@ -216,64 +231,64 @@ fn setup_smp() {
 
     debug!("Detecting and starting additional cores.");
 
-    limine_smp.get_response_mut().map(limine::SmpResponse::cpus).map_or_else(
-        || debug!("Bootloader detected no additional CPU cores."),
-        // Iterate all of the CPUs, and jump them to the SMP function.
-        |cpus| {
-            for cpu_info in cpus {
-                trace!("Starting processor: ID P{}/L{}", cpu_info.processor_id(), cpu_info.lapic_id());
+    let Some(cpus) = limine_smp.get_response_mut().map(limine::SmpResponse::cpus)
+    else {
+        debug!("Bootloader detected no additional CPU cores.");
+        return
+    };
 
-                if params::get().smp {
-                    extern "C" fn _smp_entry(info: &limine::CpuInfo) -> ! {
-                        arch::cpu_setup();
+    SMP_COUNT.call_once(|| (cpus.len() - /* don't count BSP */ 1).try_into().unwrap());
+    for cpu_info in cpus {
+        trace!("Starting processor: ID P{}/L{}", cpu_info.processor_id(), cpu_info.lapic_id());
 
-                        while !MEM_READY.load(Ordering::Relaxed) {
-                            core::hint::spin_loop();
-                        }
+        if params::get().smp {
+            extern "C" fn _smp_entry(info: &limine::CpuInfo) -> ! {
+                use crate::mem::StackUnit;
+                use alloc::boxed::Box;
 
-                        #[allow(clippy::cast_possible_truncation)]
-                        {
-                            use crate::mem::StackUnit;
-                            use alloc::boxed::Box;
+                arch::cpu_setup();
 
-                            // Safety: All currently referenced memory should also be mapped in the kernel page tables.
-                            crate::mem::with_kmapper(|kmapper| unsafe { kmapper.swap_into() });
+                while !MEM_READY.load(Ordering::Relaxed) {
+                    core::hint::spin_loop();
+                }
 
-                            info!("Core {} is allocating fresh stack...", info.lapic_id());
-                            let stack: Box<[core::mem::MaybeUninit<StackUnit>]> =
-                                Box::new_uninit_slice(crate::CORE_STACK_SIZE as usize);
-                            let stack_top = stack.as_ptr_range().end;
-                            info!("Core {} allocated fresh stack: @{:X?}", info.lapic_id(), stack_top);
+                // Safety: All currently referenced memory should also be mapped in the kernel page tables.
+                crate::mem::with_kmapper(|kmapper| unsafe { kmapper.swap_into() });
 
-                            Box::leak(stack);
+                info!("Core {} is allocating fresh stack...", info.lapic_id());
+                let stack: Box<[core::mem::MaybeUninit<StackUnit>]> =
+                    Box::new_uninit_slice(crate::CORE_STACK_SIZE.try_into().unwrap());
+                let stack_top = stack.as_ptr_range().end;
+                info!("Core {} allocated fresh stack: @{:X?}", info.lapic_id(), stack_top);
 
-                            // Safety: Memory will have been just allocated.
-                            unsafe {
-                                core::arch::asm!(
-                                    "
-                                    mov rsp, {}
-                                    call {}
-                                    ",
-                                    in(reg) stack_top,
-                                    sym kernel_core_setup,
-                                    options(nomem, nostack, noreturn)
-                                )
-                            }
-                        }
-                    }
+                Box::leak(stack);
 
-                    // If smp is enabled, jump to the smp entry function.
-                    cpu_info.jump_to(_smp_entry, None);
-                } else {
-                    extern "C" fn _idle_forever(_: &limine::CpuInfo) -> ! {
-                        // Safety: Murder isn't legal. Is this?
-                        unsafe { crate::interrupts::halt_and_catch_fire() }
-                    }
-
-                    // If smp is disabled, jump to the park function for the core.
-                    cpu_info.jump_to(_idle_forever, None);
+                // Safety: Memory will have been just allocated.
+                unsafe {
+                    #[cfg(target_arch = "x86_64")]
+                    core::arch::asm!(
+                        "
+                            mov rsp, {}
+                            xor rdi, rdi
+                            call {}
+                            ",
+                        in(reg) stack_top,
+                        sym kernel_core_setup,
+                        options(nomem, nostack, noreturn)
+                    )
                 }
             }
-        },
-    );
+
+            // If smp is enabled, jump to the smp entry function.
+            cpu_info.jump_to(_smp_entry, None);
+        } else {
+            extern "C" fn _idle_forever(_: &limine::CpuInfo) -> ! {
+                // Safety: Murder isn't legal. Is this?
+                unsafe { crate::interrupts::halt_and_catch_fire() }
+            }
+
+            // If smp is disabled, jump to the park function for the core.
+            cpu_info.jump_to(_idle_forever, None);
+        }
+    }
 }
