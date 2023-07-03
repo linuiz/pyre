@@ -8,7 +8,6 @@ edition = "2021"
 # local crates
 port-rs = { path = "../shared/port-rs/" }
 msr = { path = "../shared/msr/" }
-apic = { path = "../shared/apic/" }
 libsys = { path = "../shared/libsys/" }
 libkernel = { path = "../shared/libkernel/" }
 error = { path = "../shared/error/" }

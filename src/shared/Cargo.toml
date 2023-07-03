@@ -1,12 +1,3 @@
 [workspace]
 resolver = "2"
-members = [
-    "libsys",
-    "libkernel",
-    "apic",
-    "msr",
-    "pic_8259",
-    "port-rs",
-    "pmm",
-    "error",
-]
+members = ["libsys", "libkernel", "msr", "pic_8259", "port-rs", "pmm", "error"]
