@@ -13,15 +13,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "apic"
-version = "0.1.0"
-dependencies = [
- "bit_field",
- "bitflags 2.3.3",
- "msr",
-]
-
-[[package]]
 name = "arrayvec"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -107,7 +98,6 @@ name = "kernel"
 version = "0.0.0"
 dependencies = [
  "acpi",
- "apic",
  "bit_field",
  "bitflags 2.3.3",
  "bitvec",

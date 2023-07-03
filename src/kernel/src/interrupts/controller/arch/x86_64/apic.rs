@@ -1,8 +1,9 @@
-#![no_std]
 #![allow(non_camel_case_types, non_upper_case_globals)]
 
+use crate::mem::paging;
 use bit_field::BitField;
 use core::marker::PhantomData;
+use libsys::{Address, Frame};
 use msr::IA32_APIC_BASE;
 
 #[repr(u32)]
@@ -29,7 +30,7 @@ pub enum TimerMode {
 impl TryFrom<u32> for TimerMode {
     type Error = u32;
 
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
+    fn try_from(value: u32) -> core::result::Result<Self, Self::Error> {
         match value {
             0b00 => Ok(Self::OneShot),
             0b01 => Ok(Self::Periodic),
@@ -186,8 +187,18 @@ impl Register {
     }
 }
 
+errorgen! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Error {
+        Paging { err: paging::Error } => Some(err),
+        NoApic => None
+    }
+}
+
 pub const xAPIC_BASE_ADDR: usize = 0xFEE00000;
 pub const x2APIC_BASE_MSR_ADDR: u32 = 0x800;
+
+static APIC: spin::Once<Apic> = spin::Once::new();
 
 /// Type for representing the mode of the core-local APIC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,20 +207,39 @@ enum Type {
     x2APIC,
 }
 
-pub struct Apic(Type);
+pub struct Apic<'a>(Type, PhantomData<&'a ()>);
 
-impl Apic {
-    pub fn new(map_xapic_fn: Option<impl FnOnce(usize) -> *mut u8>) -> Option<Self> {
+// Safety: Apic utilizes HHDM.
+unsafe impl Send for Apic<'_> {}
+// Safety: Apic uses MMIO with per-core access.
+unsafe impl Sync for Apic<'_> {}
+
+impl Apic<'_> {
+    #[allow(clippy::similar_names)]
+    pub fn new_init() -> Result<Self> {
         let is_xapic = IA32_APIC_BASE::get_hw_enabled() && !IA32_APIC_BASE::get_is_x2_mode();
         let is_x2apic = IA32_APIC_BASE::get_hw_enabled() && IA32_APIC_BASE::get_is_x2_mode();
 
         if is_x2apic {
-            Some(Self(Type::x2APIC))
+            Ok(Apic(Type::x2APIC, PhantomData))
         } else if is_xapic {
-            let map_xapic_fn = map_xapic_fn.expect("no mapping function provided for xAPIC");
-            Some(Self(Type::xAPIC(map_xapic_fn(IA32_APIC_BASE::get_base_address().try_into().unwrap()))))
+            use crate::mem::{with_kmapper, HHDM};
+            use paging::{Error as PagingError, TableDepth, TableEntryFlags};
+
+            let xapic_addr = usize::try_from(IA32_APIC_BASE::get_base_address()).unwrap();
+            let xapic_addr = Address::<Frame>::new(xapic_addr).unwrap();
+            let xapic_hhdm_addr = HHDM.offset(xapic_addr).unwrap();
+
+            with_kmapper(|mapper| {
+                match mapper.map(xapic_hhdm_addr, TableDepth::min(), xapic_addr, true, TableEntryFlags::MMIO) {
+                    Ok(_) | Err(PagingError::AllocError) => Ok(()),
+                    Err(err) => Err(Error::Paging { err }),
+                }
+            })?;
+
+            Ok(Apic(Type::xAPIC(xapic_hhdm_addr.as_ptr()), PhantomData))
         } else {
-            None
+            Err(Error::NoApic)
         }
     }
 
@@ -227,7 +257,7 @@ impl Apic {
     /// ### Safety
     ///
     /// Writing an invalid value to a register is undefined behaviour.
-    unsafe fn write_register(&self, register: Register, value: u32) {
+    unsafe fn write_register(&mut self, register: Register, value: u32) {
         match self.0 {
             Type::xAPIC(xapic_ptr) => xapic_ptr.add(register.xapic_offset()).cast::<u32>().write_volatile(value),
             Type::x2APIC => msr::wrmsr(register.x2apic_msr(), value.into()),
@@ -239,7 +269,7 @@ impl Apic {
     /// Given the amount of external contexts that could potentially rely on the APIC, enabling it
     /// has the oppurtunity to affect those contexts in undefined ways.
     #[inline]
-    pub unsafe fn sw_enable(&self) {
+    pub unsafe fn sw_enable(&mut self) {
         self.write_register(Register::SPR, *self.read_register(Register::SPR).set_bit(8, true));
     }
 
@@ -248,7 +278,7 @@ impl Apic {
     /// Given the amount of external contexts that could potentially rely on the APIC, disabling it
     /// has the oppurtunity to affect those contexts in undefined ways.
     #[inline]
-    pub unsafe fn sw_disable(&self) {
+    pub unsafe fn sw_disable(&mut self) {
         self.write_register(Register::SPR, *self.read_register(Register::SPR).set_bit(8, false));
     }
 
@@ -263,7 +293,7 @@ impl Apic {
 
     // TODO maybe unsafe?
     #[inline]
-    pub fn end_of_interrupt(&self) {
+    pub fn end_of_interrupt(&mut self) {
         unsafe { self.write_register(Register::EOI, 0x0) };
     }
 
@@ -276,7 +306,7 @@ impl Apic {
     ///
     /// An invalid or unexpcted interrupt command could potentially put the core in an unusable state.
     #[inline]
-    pub unsafe fn send_int_cmd(&self, interrupt_command: InterruptCommand) {
+    pub unsafe fn send_int_cmd(&mut self, interrupt_command: InterruptCommand) {
         self.write_register(Register::ICRL, interrupt_command.get_id());
         self.write_register(Register::ICRH, interrupt_command.get_cmd());
     }
@@ -287,7 +317,7 @@ impl Apic {
     /// internal local timer clock. Thus, changing the divisor has the potential to
     /// cause the same sorts of UB that [`set_timer_initial_count`] can cause.
     #[inline]
-    pub unsafe fn set_timer_divisor(&self, divisor: TimerDivisor) {
+    pub unsafe fn set_timer_divisor(&mut self, divisor: TimerDivisor) {
         self.write_register(Register::TIMER_DIVISOR, divisor.as_divide_value().into());
     }
 
@@ -297,7 +327,7 @@ impl Apic {
     /// to a situation where another context is awaiting a specific clock duration, but
     /// is instead interrupted later than expected.
     #[inline]
-    pub unsafe fn set_timer_initial_count(&self, count: u32) {
+    pub unsafe fn set_timer_initial_count(&mut self, count: u32) {
         self.write_register(Register::TIMER_INT_CNT, count);
     }
 
@@ -308,11 +338,6 @@ impl Apic {
 
     #[inline]
     pub fn get_timer(&self) -> LocalVector<Timer> {
-        LocalVector(self, PhantomData)
-    }
-
-    #[inline]
-    pub fn get_lint0(&self) -> LocalVector<LINT0> {
         LocalVector(self, PhantomData)
     }
 
@@ -332,7 +357,7 @@ impl Apic {
     }
 
     #[inline]
-    pub fn get_error(&self) -> LocalVector<Error> {
+    pub fn get_error(&self) -> LocalVector<Exception> {
         LocalVector(self, PhantomData)
     }
 
@@ -346,7 +371,7 @@ impl Apic {
     /// ### Safety
     ///
     /// The caller must guarantee that software is in a state that is ready to accept the APIC performing a software reset.
-    pub unsafe fn software_reset(&self, spr_vector: u8, lint0_vector: u8, lint1_vector: u8) {
+    pub unsafe fn software_reset(&mut self, spr_vector: u8, lint0_vector: u8, lint1_vector: u8) {
         self.sw_disable();
 
         self.write_register(Register::TPR, 0x0);
@@ -397,13 +422,13 @@ impl LocalVectorVariant for Thermal {
 }
 impl GenericVectorVariant for Thermal {}
 
-pub struct Error;
-impl LocalVectorVariant for Error {
+pub struct Exception;
+impl LocalVectorVariant for Exception {
     const REGISTER: Register = Register::LVT_ERR;
 }
 
 #[repr(transparent)]
-pub struct LocalVector<'a, T: LocalVectorVariant>(&'a Apic, PhantomData<T>);
+pub struct LocalVector<'a, T: LocalVectorVariant>(&'a Apic<'a>, PhantomData<T>);
 
 impl<T: LocalVectorVariant> LocalVector<'_, T> {
     const INTERRUPTED_OFFSET: usize = 12;
@@ -423,7 +448,7 @@ impl<T: LocalVectorVariant> LocalVector<'_, T> {
     ///
     /// Masking an interrupt may result in contexts expecting that interrupt to fire to deadlock.
     #[inline]
-    pub unsafe fn set_masked(&self, masked: bool) -> &Self {
+    pub unsafe fn set_masked(&mut self, masked: bool) -> &Self {
         self.0.write_register(T::REGISTER, *self.0.read_register(T::REGISTER).set_bit(Self::MASKED_OFFSET, masked));
 
         self
@@ -442,7 +467,7 @@ impl<T: LocalVectorVariant> LocalVector<'_, T> {
     /// Given the vector is an arbitrary >32 `u8`, all contexts must agree on what vectors
     /// correspond to what local interrupts.
     #[inline]
-    pub unsafe fn set_vector(&self, vector: u8) -> &Self {
+    pub unsafe fn set_vector(&mut self, vector: u8) -> &Self {
         assert!(vector >= 32, "interrupt vectors 0..32 are reserved");
 
         self.0.write_register(T::REGISTER, *self.0.read_register(T::REGISTER).set_bits(0..8, vector.into()));
@@ -462,7 +487,7 @@ impl<T: GenericVectorVariant> LocalVector<'_, T> {
     ///
     /// Setting the incorrect delivery mode may result in interrupts not being received
     /// correctly, or being sent to all cores at once.
-    pub unsafe fn set_delivery_mode(&self, mode: DeliveryMode) -> &Self {
+    pub unsafe fn set_delivery_mode(&mut self, mode: DeliveryMode) -> &Self {
         self.0.write_register(T::REGISTER, *self.0.read_register(T::REGISTER).set_bits(8..11, mode as u32));
 
         self
@@ -480,7 +505,7 @@ impl LocalVector<'_, Timer> {
     /// Setting the mode of the timer may result in undefined behaviour if switching modes while
     /// the APIC is currently active and ticking (or otherwise expecting the timer to behave in
     /// a particular, pre-defined fashion).
-    pub unsafe fn set_mode(&self, mode: TimerMode) -> &Self {
+    pub unsafe fn set_mode(&mut self, mode: TimerMode) -> &Self {
         let tsc_dl_support = core::arch::x86_64::__cpuid(0x1).ecx.get_bit(24);
 
         assert!(mode != TimerMode::TscDeadline || tsc_dl_support, "TSC deadline is not supported on this CPU.");

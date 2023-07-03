@@ -1,6 +1,7 @@
 pub mod symbols;
 
-use core::ptr::NonNull;
+use alloc::string::String;
+use core::{fmt::Write, ptr::NonNull};
 use libsys::{Address, Virtual};
 
 #[repr(C)]
@@ -40,24 +41,55 @@ impl Iterator for StackTracer {
 /// This function should *never* panic or abort.
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    error!(
-        "KERNEL PANIC (at {}): {}",
+    use spin::{Lazy, Mutex};
+
+    static TRACE_BUILDER: Lazy<Mutex<String>> = Lazy::new(|| {
+        use crate::mem::alloc::eternal::EternalAllocator;
+        use alloc::boxed::Box;
+
+        // Safety: Memory is properly initialized by allocator, and leaked into a `String` with the same capacity.
+        unsafe {
+            const PANIC_STR_BUFFER_LEN: usize = 0x2000;
+
+            let alloc = Box::<[u8], EternalAllocator>::new_zeroed_slice_in(PANIC_STR_BUFFER_LEN, EternalAllocator)
+                .assume_init();
+            let string = String::from_raw_parts(Box::leak(alloc).as_mut_ptr(), 0, PANIC_STR_BUFFER_LEN);
+
+            Mutex::new(string)
+        }
+    });
+
+    let mut trace_builder = TRACE_BUILDER.lock();
+
+    trace_builder.write_fmt(format_args!(
+        "KERNEL PANIC (at {}): {}\n",
         info.location().unwrap_or(core::panic::Location::caller()),
         info.message().unwrap_or(&format_args!("no panic message"))
-    );
+    ));
 
-    stack_trace();
+    stack_trace(&mut trace_builder);
+
+    error!("{trace_builder}");
+
+    trace_builder.clear();
+
+    drop(trace_builder);
 
     // Safety: It's dead, Jim.
     unsafe { crate::interrupts::halt_and_catch_fire() }
 }
 
-fn stack_trace() {
-    fn print_stack_trace_entry<D: core::fmt::Display>(entry_num: usize, fn_address: Address<Virtual>, symbol_name: D) {
-        error!("{entry_num:.<4}0x{:X} {symbol_name:#}", fn_address.get());
+fn stack_trace(trace_builder: &mut String) {
+    fn write_stack_trace_entry<D: core::fmt::Display>(
+        buffer: &mut String,
+        entry_num: usize,
+        fn_address: Address<Virtual>,
+        symbol_name: D,
+    ) {
+        buffer.write_fmt(format_args!("{entry_num:.<4}0x{:X} {symbol_name:#}\n", fn_address.get())).ok();
     }
 
-    error!("----------STACK-TRACE---------");
+    trace_builder.push_str("----------STACK-TRACE---------\n");
 
     let frame_ptr = {
         #[cfg(target_arch = "x86_64")]
@@ -73,17 +105,17 @@ fn stack_trace() {
 
             if let Some((_, Some(symbol_name))) = symbols::get(trace_address) {
                 if let Ok(demangled) = rustc_demangle::try_demangle(symbol_name) {
-                    print_stack_trace_entry(depth, trace_address, demangled);
+                    write_stack_trace_entry(&mut trace_builder, depth, trace_address, demangled);
                 } else {
-                    print_stack_trace_entry(depth, trace_address, symbol_name);
+                    write_stack_trace_entry(&mut trace_builder, depth, trace_address, symbol_name);
                 }
             } else {
-                print_stack_trace_entry(depth, trace_address, "!!! no function found !!!");
+                write_stack_trace_entry(&mut trace_builder, depth, trace_address, "!!! no function found !!!");
             }
         }
     } else {
-        error!("No base pointer; stack trace empty.");
+        trace_builder.push_str("No base pointer; stack trace empty.\n");
     }
 
-    error!("----------STACK-TRACE----------");
+    trace_builder.push_str("----------STACK-TRACE----------\n");
 }
