@@ -1,5 +1,3 @@
-use core::ops::{Div, Rem};
-
 use crate::interrupts::InterruptCell;
 use spin::Mutex;
 use uart::{Data, Uart, UartWriter};

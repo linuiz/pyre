@@ -16,6 +16,7 @@
     try_trait_v2,                           // #84277 <https://github.com/rust-lang/rust/issues/84277>
     step_trait,                             // #42168 <https://github.com/rust-lang/rust/issues/42168>
     ptr_sub_ptr,                            // #95892 <https://github.com/rust-lang/rust/issues/95892>
+    pointer_byte_offsets,                   // #96283 <https://github.com/rust-lang/rust/issues/96283>
     asm_const,
     naked_functions,
     sync_unsafe_cell,

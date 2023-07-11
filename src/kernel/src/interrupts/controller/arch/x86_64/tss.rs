@@ -1,8 +1,7 @@
 #![allow(clippy::module_name_repetitions)]
 
-use super::gdt;
-
-pub use ia32utils::{instructions::tables::load_tss, structures::tss::*};
+use crate::arch::x86_64::structures::gdt;
+use ia32utils::{instructions::tables::load_tss, structures::tss::TaskStateSegment};
 
 pub fn ptr_as_descriptor(tss_ptr: core::ptr::NonNull<TaskStateSegment>) -> gdt::Descriptor {
     use bit_field::BitField;
@@ -44,6 +43,6 @@ pub unsafe fn load_local(descriptor: gdt::Descriptor) {
         // ... load TSS from temporary GDT ...
         load_tss(tss_selector);
         // ... and restore cached GDT.
-        super::gdt::lgdt(&cur_gdt);
+        gdt::lgdt(&cur_gdt);
     });
 }

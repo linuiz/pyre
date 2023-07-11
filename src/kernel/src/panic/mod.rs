@@ -40,7 +40,7 @@ impl Iterator for StackTracer {
 ///
 /// This function should *never* panic or abort.
 #[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
+fn panic(panic_info: &core::panic::PanicInfo) -> ! {
     use spin::{Lazy, Mutex};
 
     static TRACE_BUILDER: Lazy<Mutex<String>> = Lazy::new(|| {
@@ -61,11 +61,13 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
     let mut trace_builder = TRACE_BUILDER.lock();
 
-    trace_builder.write_fmt(format_args!(
-        "KERNEL PANIC (at {}): {}\n",
-        info.location().unwrap_or(core::panic::Location::caller()),
-        info.message().unwrap_or(&format_args!("no panic message"))
-    ));
+    trace_builder
+        .write_fmt(format_args!(
+            "KERNEL PANIC (at {}): {}\n",
+            panic_info.location().unwrap_or(core::panic::Location::caller()),
+            panic_info.message().unwrap_or(&format_args!("no panic message"))
+        ))
+        .unwrap();
 
     stack_trace(&mut trace_builder);
 
@@ -105,12 +107,12 @@ fn stack_trace(trace_builder: &mut String) {
 
             if let Some((_, Some(symbol_name))) = symbols::get(trace_address) {
                 if let Ok(demangled) = rustc_demangle::try_demangle(symbol_name) {
-                    write_stack_trace_entry(&mut trace_builder, depth, trace_address, demangled);
+                    write_stack_trace_entry(trace_builder, depth, trace_address, demangled);
                 } else {
-                    write_stack_trace_entry(&mut trace_builder, depth, trace_address, symbol_name);
+                    write_stack_trace_entry(trace_builder, depth, trace_address, symbol_name);
                 }
             } else {
-                write_stack_trace_entry(&mut trace_builder, depth, trace_address, "!!! no function found !!!");
+                write_stack_trace_entry(trace_builder, depth, trace_address, "!!! no function found !!!");
             }
         }
     } else {
