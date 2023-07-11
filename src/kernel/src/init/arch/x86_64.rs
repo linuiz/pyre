@@ -60,7 +60,7 @@ pub fn cpu_setup() {
     }
 
     // Load the static processor tables for this core.
-    crate::arch::x86_64::structures::load_static_tables();
+    // crate::arch::x86_64::structures::load_static_tables();
 
     // Setup system call interface.
     // // Safety: Parameters are set according to the IA-32 SDM, and so should have no undetermined side-effects.

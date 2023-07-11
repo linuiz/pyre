@@ -1,6 +1,8 @@
-pub mod controller;
 pub mod exceptions;
 pub mod traps;
+
+mod controller;
+pub use controller::*;
 
 mod instructions;
 pub use instructions::*;
@@ -39,24 +41,6 @@ pub enum DeliveryMode {
 pub enum DestinationMode {
     Physical = 0,
     Logical = 1,
-}
-
-#[repr(u64)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
-#[allow(non_camel_case_types)]
-pub enum Vector {
-    Clock = 0x20,
-    /* 0x21..=0x2F reserved for PIC */
-    Timer = 0x30,
-    Thermal = 0x32,
-    Performance = 0x33,
-    /* 0x34..=0x3B free for use */
-    Error = 0x3C,
-    LINT0 = 0x3D,
-    LINT1 = 0x3E,
-    Spurious = 0x3F,
-
-    Syscall = 0x80,
 }
 
 /// Provides access to the contained instance of `T`, ensuring interrupts are disabled before it is borrowed.

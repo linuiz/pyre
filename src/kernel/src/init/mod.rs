@@ -9,8 +9,6 @@ pub mod boot;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use libsys::Address;
 
-use crate::time::clock::Instant;
-
 errorgen! {
     #[derive(Debug)]
     pub enum Error {
@@ -77,7 +75,7 @@ pub(self) unsafe extern "sysv64" fn kernel_core_setup(is_bsp: bool) -> ! {
         crate::init::boot::reclaim_memory().unwrap();
     }
 
-    crate::cpu::state::init(1000);
+    crate::cpu::state::init(core::num::NonZeroU16::new(1000).unwrap());
 
     // Ensure we enable interrupts prior to enabling the scheduler.
     crate::interrupts::enable();

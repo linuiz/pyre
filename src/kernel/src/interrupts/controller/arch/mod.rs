@@ -3,23 +3,17 @@ mod x86_64;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::*;
 
-pub trait ArchTimer {
+use core::num::NonZeroU16;
+
+pub trait Controller {
+    unsafe fn reset(&mut self);
     unsafe fn enable(&mut self);
     unsafe fn disable(&mut self);
-    unsafe fn set_frequency(&mut self, frequency: core::num::NonZeroUsize);
-}
 
-pub trait ArchController {
-    type Timer: ArchTimer;
-    type Error;
-
-    fn new_init() -> core::result::Result<Self, Self::Error>
-    where
-        Self: Sized;
-
-    unsafe fn enable(&mut self);
-    unsafe fn disable(&mut self);
-    fn timer(&mut self) -> &mut Self::Timer;
+    unsafe fn enable_timer(&mut self);
+    unsafe fn disable_timer(&mut self);
+    unsafe fn set_timer_frequency(&mut self, desired_frequency: NonZeroU16);
+    unsafe fn set_timer_wait(&mut self, wait_factor: NonZeroU16);
 
     fn end_interrupt(&mut self);
 }

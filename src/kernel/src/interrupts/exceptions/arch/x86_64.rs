@@ -5,7 +5,7 @@ use libsys::{Address, Virtual};
 /// x86_64 exception wrapper type.
 #[repr(C)]
 #[derive(Debug)]
-#[allow(non_camel_case_types)]
+#[allow(non_camel_case_types, clippy::doc_markdown)]
 pub enum ArchException<'a> {
     /// Generated upon an attempt to divide by zero.
     DivideError(&'a InterruptStackFrame, &'a Registers),
