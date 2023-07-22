@@ -8,6 +8,7 @@ pub mod ioapic;
 //     // Always initialize GDT prior to configuring IDT.
 //     crate::arch::x86_64::structures::gdt::load();
 
+<<<<<<< Updated upstream
 //     // Due to the fashion in which the `x86_64` crate initializes the IDT entries,
 //     // it must be ensured that the handlers are set only *after* the GDT has been
 //     // properly initialized and loaded—otherwise, the `CS` value for the IDT entries
@@ -19,7 +20,6 @@ pub mod ioapic;
 //             crate::arch::x86_64::structures::idt::set_stub_handlers(&mut idt);
 //             idt
 //         });
-
 //         STATIC_IDT.load();
 //     });
 // }

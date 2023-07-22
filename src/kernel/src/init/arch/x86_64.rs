@@ -1,10 +1,17 @@
-pub fn cpu_setup() {
-    use crate::arch::x86_64::{
-        cpuid,
-        registers::control::{CR0Flags, CR4Flags, CR0, CR4},
-        registers::msr,
-    };
+use crate::arch::x86_64::{
+    cpuid,
+    registers::control::{CR0Flags, CR4Flags, CR0, CR4},
+    registers::msr,
+    structures::load_static_tables,
+};
 
+pub fn setup() {
+    load_static_tables();
+
+    cpu_setup();
+}
+
+fn cpu_setup() {
     // Set CR0 flags.
     // Safety: We set `CR0` once, and setting it again during kernel execution is not supported.
     unsafe { CR0::write(CR0Flags::PE | CR0Flags::MP | CR0Flags::ET | CR0Flags::NE | CR0Flags::WP | CR0Flags::PG) };

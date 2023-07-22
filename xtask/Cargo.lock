@@ -1336,7 +1336,7 @@ checksum = "88301b56c26dd9bf5c43d858538f82d6f3f7764767defbc5d34e59459901c41a"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",

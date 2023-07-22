@@ -235,9 +235,15 @@ fn setup_smp() {
         return
     };
 
+<<<<<<< Updated upstream
     SMP_COUNT.call_once(|| (cpus.len() - /* don't count BSP */ 1).try_into().unwrap());
     for cpu_info in cpus {
         trace!("Starting processor: ID P{}/L{}", cpu_info.processor_id(), cpu_info.lapic_id());
+=======
+                if params::get().smp {
+                    extern "C" fn _smp_entry(_: &limine::CpuInfo) -> ! {
+                        arch::setup();
+>>>>>>> Stashed changes
 
         if params::get().smp {
             extern "C" fn _smp_entry(info: &limine::CpuInfo) -> ! {
