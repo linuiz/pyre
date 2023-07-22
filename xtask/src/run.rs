@@ -86,14 +86,14 @@ pub struct Options {
 
     /// Runs the kernel in serial-only mode (no graphics driving).
     #[arg(long)]
-    nographic: bool,
+    nographics: bool,
 
     #[clap(flatten)]
     build_options: crate::build::Options,
 
     /// Skips execution and only prints the QEMU command that would have been executed.
     #[arg(short, long)]
-    norun: bool,
+    mock: bool,
 
     /// Puts QEMU in GDB debug mode, awaiting signal from the debugger to begin execution.
     #[arg(short, long)]
@@ -147,7 +147,7 @@ pub fn run(sh: &xshell::Shell, options: Options) -> Result<()> {
         ]),
     };
 
-    if options.nographic {
+    if options.nographics {
         optional_args.push("-nographic");
     }
 
@@ -174,7 +174,7 @@ pub fn run(sh: &xshell::Shell, options: Options) -> Result<()> {
         "
     );
 
-    if options.norun {
+    if options.mock {
         println!("cmd: {}", cmd.to_string());
         Ok(())
     } else {
