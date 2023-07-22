@@ -176,8 +176,9 @@ pub fn run(sh: &xshell::Shell, options: Options) -> Result<()> {
 
     if options.mock {
         println!("cmd: {}", cmd.to_string());
-        Ok(())
     } else {
-        cmd.run().with_context(|| "failed running OS")
+        cmd.run()?;
     }
+
+    Ok(())
 }

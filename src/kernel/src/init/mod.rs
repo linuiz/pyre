@@ -31,7 +31,7 @@ pub(super) unsafe extern "C" fn _init() -> ! {
     setup_logging();
     debug!("Logging successfully setup.");
 
-    arch::cpu_setup();
+    arch::core_setup();
     print_boot_info();
 
     #[limine::limine_tag]
@@ -235,22 +235,16 @@ fn setup_smp() {
         return
     };
 
-<<<<<<< Updated upstream
     SMP_COUNT.call_once(|| (cpus.len() - /* don't count BSP */ 1).try_into().unwrap());
     for cpu_info in cpus {
         trace!("Starting processor: ID P{}/L{}", cpu_info.processor_id(), cpu_info.lapic_id());
-=======
-                if params::get().smp {
-                    extern "C" fn _smp_entry(_: &limine::CpuInfo) -> ! {
-                        arch::setup();
->>>>>>> Stashed changes
 
         if params::get().smp {
             extern "C" fn _smp_entry(info: &limine::CpuInfo) -> ! {
                 use crate::mem::StackUnit;
                 use alloc::boxed::Box;
 
-                arch::cpu_setup();
+                arch::core_setup();
 
                 while !MEM_READY.load(Ordering::Relaxed) {
                     core::hint::spin_loop();

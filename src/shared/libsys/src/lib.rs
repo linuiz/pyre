@@ -22,11 +22,13 @@ pub use little_endian::*;
 pub mod io;
 pub mod syscall;
 
-extern crate alloc;
 #[macro_use]
 extern crate static_assertions;
+
 #[macro_use]
 extern crate error;
+
+extern crate alloc;
 
 use core::num::NonZeroU32;
 
