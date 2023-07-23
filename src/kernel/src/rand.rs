@@ -4,10 +4,8 @@ getrandom::register_custom_getrandom!(prng_custom_getrandom);
 
 #[allow(clippy::unnecessary_wraps)]
 fn prng_custom_getrandom(buf: &mut [u8]) -> Result<(), getrandom::Error> {
-    trace!("[RAND] RANDOMIZING BYTES FOR BUFFER: []:{}", buf.len());
     for (index, chunk) in buf.chunks_mut(core::mem::size_of::<u64>()).enumerate() {
         let rng_bytes = prng::next_u64().to_ne_bytes();
-        trace!("[RAND] Chunk {}: {:?}", index, rng_bytes);
         chunk.copy_from_slice(&rng_bytes[..chunk.len()]);
     }
 

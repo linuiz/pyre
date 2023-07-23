@@ -1,57 +1,95 @@
 #![cfg_attr(not(test), no_std)]
 #![feature(
-    error_in_core   // #103765 <https://github.com/rust-lang/rust/issues/103765>
+    error_in_core,  // #103765 <https://github.com/rust-lang/rust/issues/103765>
+    if_let_guard,   // #51114 <https://github.com/rust-lang/rust/issues/51114>
+    let_chains,     //#53667 <https://github.com/rust-lang/rust/issues/53667>
 )]
 
-use core::{marker::PhantomData, mem::size_of, ops::Range, ptr::NonNull};
+use core::{fmt, marker::PhantomData, mem::size_of, ops::Range, ptr::NonNull, convert::Infallible};
 
-#[macro_use]
-extern crate error;
+pub trait Metadata: Default + Clone + Copy + PartialEq + Eq + From<usize> + Into<usize> {
+    fn is_usable(&self) -> bool;
+}
 
-errorgen! {
-    #[derive(Debug)]
-    pub enum Error {
-        InvalidTableSize => None,
-        RegionOverlap => None,
-        Uninsertable => None,
+impl Metadata for usize {
+    fn is_usable(&self) -> bool {
+        false
     }
 }
 
-pub trait Metadata: PartialEq + Eq + From<usize> {}
-
 #[repr(C)]
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Region {
+#[derive(Default, Clone, Copy)]
+pub struct Region<M: Metadata> {
     metadata: usize,
     start: usize,
     end: usize,
     _reserved: [u8; size_of::<usize>()],
+    _marker: PhantomData<M>,
 }
 
-impl Region {
-    const fn extents(&self) -> Range<usize> {
+impl<M: Metadata> Region<M> {
+    #[inline]
+    pub const fn extents(&self) -> Range<usize> {
         self.start..self.end
+    }
+
+    #[inline]
+    pub fn metadata(&self) -> M {
+        M::from(self.metadata)
     }
 }
 
+impl<M: Metadata> fmt::Debug for Region<M> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Region").field(&self.metadata).field(&self.extents()).finish()
+    }
+}
+
+const REGION_TABLE_SIZE: usize = (libsys::page_size() / core::mem::size_of::<Region<usize>>()) - 1;
+
 #[repr(C)]
-#[derive(Debug)]
-pub struct RegionTable<M: Metadata, const TABLE_LEN: usize> {
-    regions: [Region; TABLE_LEN],
+pub struct RegionTable<M: Metadata> {
+    table: [Region<M>; REGION_TABLE_SIZE],
+
+    /* These two fields should be the same total size as a `Region<M>` */
     len: usize,
     next_table_ptr: Option<NonNull<Self>>,
     phantom: PhantomData<M>,
 }
 
-impl<M: Metadata, const TABLE_LEN: usize> Default for RegionTable<M, TABLE_LEN> {
+impl<M: Metadata> Default for RegionTable<M> {
     fn default() -> Self {
-        assert!((TABLE_LEN + 1).is_power_of_two());
-
-        Self { regions: [Region::default(); TABLE_LEN], len: 0, next_table_ptr: None, phantom: PhantomData }
+        Self { table: [Region::default(); REGION_TABLE_SIZE], len: 0, next_table_ptr: None, phantom: PhantomData }
     }
 }
 
-impl<M: Metadata, const TABLE_LEN: usize> RegionTable<M, TABLE_LEN> {
+impl<M: Metadata> RegionTable<M> {
+    #[inline]
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    pub const fn is_full(&self) -> bool {
+        self.len() == REGION_TABLE_SIZE
+    }
+
+    #[inline]
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    #[inline]
+    fn table(&self) -> &[Region<M>] {
+        let len = self.len();
+        &self.table[..len]
+    }
+    #[inline]
+    fn table_mut(&mut self) -> &mut [Region<M>] {
+        let len = self.len();
+        &mut self.table[..len]
+    }
+
     #[inline]
     fn next_table(&self) -> Option<&Self> {
         // Safety: If pointer is non-null, it's been allocated.
@@ -64,164 +102,109 @@ impl<M: Metadata, const TABLE_LEN: usize> RegionTable<M, TABLE_LEN> {
         self.next_table_ptr.map(|mut ptr| unsafe { ptr.as_mut() })
     }
 
-    #[inline]
-    fn increment_len_capped(&mut self) {
-        self.len = core::cmp::min(TABLE_LEN, self.len + 1);
-    }
-
-    #[inline]
-    pub const fn is_full(&self) -> bool {
-        self.len == TABLE_LEN
-    }
-
-    #[inline]
-    pub const fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    fn extents(&self) -> Option<Range<usize>> {
-        match self.len {
-            0 => None,
-            1 => Some(self.regions[0].extents()),
-            _ => {
-                let start_region = self.regions[0];
-                let end_region = self.regions[self.len - 1];
-
-                Some(start_region.start..end_region.end)
-            }
-        }
-    }
-
-    fn shuffle_in(&mut self, index: usize) {
-        assert!(index < self.len);
-
-        if self.len == TABLE_LEN {
-            // check if we need to shuffle from the next table
-        }
+    /// Shuffles all elements at the given index down by one.
+    fn shuffle_down(&mut self, index: usize) {
+        assert!(index < self.len());
 
         unsafe {
-            let copy_from = self.regions.as_ptr().add(index);
+            let copy_from = self.table.as_ptr().add(index);
             let copy_to = copy_from.sub(1).cast_mut();
-            let copy_count = self.len - index;
+            let copy_count = self.table().len() - index;
             core::ptr::copy(copy_from, copy_to, copy_count);
+        }
+
+        if let Some(_next_table) = self.next_table_mut() {
+            todo!(
+                "
+                1. shuffle first item from next table
+                2. check if we need to deallocate the next table
+                "
+            );
+        } else {
+            self.len -= 1;
         }
     }
 
-    fn shuffle_out(&mut self, index: usize) {
+    /// Shuffles all elements at the given index up by one.
+    fn shuffle_up(&mut self, index: usize) {
         assert!(index < self.len);
 
-        if self.len == TABLE_LEN {
-            // shuffle elements into next table
+        if self.is_full() {
+            todo!(
+                "
+                1. allocate a new table
+                2. place last item into next table
+                "
+            )
+        } else {
+            self.len += 1;
         }
 
         unsafe {
-            let copy_from = self.regions.as_ptr().add(index);
+            let copy_from = self.table.as_ptr().add(index);
             let copy_to = copy_from.add(1).cast_mut();
-            let copy_count = self.len - index;
+            let copy_count = self.table().len() - index;
             core::ptr::copy(copy_from, copy_to, copy_count);
         }
     }
 
-    pub fn insert(&mut self, new_region: Region) -> Result<()> {
-        let new_metadata = M::from(new_region.metadata);
+    pub fn insert(&mut self, region: Region<M>) {
+        match self.table().iter().rposition(|region| region.end <= region.start) {
+            Some(insert_at) => {
+                let insert_at_region = self.table().get(insert_at).copied().unwrap();
+                let insert_at_pre_region = self.table().get(insert_at - 1).copied();
 
-        match self.extents() {
-            None => {
-                debug_assert_eq!(self.len, 0, "len should be zero with no extents");
+                let collapse_at =
+                    region.end == insert_at_region.start && region.metadata() == insert_at_region.metadata();
+                let collapse_at_pre = insert_at_pre_region
+                    .map(|pre_region| region.start == pre_region.end && region.metadata() == pre_region.metadata())
+                    .unwrap_or(false);
 
-                self.regions[0] = new_region;
-
-                self.increment_len_capped();
-                Ok(())
-            }
-
-            Some(extents) => {
-                use core::cmp::Ordering;
-
-                match (new_region.start.cmp(&extents.start), new_region.end.cmp(&extents.end)) {
-                    (Ordering::Less, Ordering::Less) => {
-                        let cur_region = self.regions[0];
-
-                        if new_region.end == cur_region.start && new_metadata == M::from(cur_region.metadata) {
-                            self.regions[0].start = new_region.start;
-                        } else {
-                            self.shuffle_out(0);
-                            self.regions[0] = new_region;
-                            self.increment_len_capped();
-                        }
-
-                        Ok(())
+                match (collapse_at, collapse_at_pre) {
+                    (true, true) => {
+                        let collapse_at = self.table_mut().get_mut(insert_at).unwrap();
+                        collapse_at.start = insert_at_pre_region.unwrap().start;
+                        self.shuffle_down(insert_at);
                     }
 
-                    (Ordering::Greater, Ordering::Less) => {
-                        if let Some(insert_at) =
-                            self.regions[..self.len].iter().rposition(|region| new_region.end <= region.start)
-                        {
-                            let cur_region = self.regions[insert_at];
-                            let collapse_antecedent =
-                                new_region.end == cur_region.start && new_metadata == M::from(cur_region.metadata);
-                            let collapse_precedent = self
-                                .regions
-                                .get(insert_at - 1)
-                                .map(|r| new_region.start == r.end && new_metadata == M::from(r.metadata));
-
-                            match (collapse_precedent, collapse_antecedent) {
-                                (Some(true), true) => {
-                                    let start = self.regions[insert_at - 1].start;
-                                    self.shuffle_in(insert_at);
-
-                                    self.regions[insert_at].start = start;
-                                    self.len -= 1;
-                                }
-
-                                (_, true) => {
-                                    self.regions[insert_at].start = new_region.start;
-                                    self.increment_len_capped();
-                                }
-
-                                (Some(true), _) => {
-                                    self.regions[insert_at - 1].end = new_region.end;
-                                    self.increment_len_capped();
-                                }
-
-                                (_, false) => {
-                                    self.shuffle_out(insert_at);
-                                    self.regions[insert_at] = new_region;
-                                    self.increment_len_capped();
-                                }
-                            }
-
-                            Ok(())
-                        } else {
-                            Err(Error::Uninsertable)
-                        }
+                    (true, false) => {
+                        let collapse_at = self.table_mut().get_mut(insert_at).unwrap();
+                        collapse_at.start = region.start;
                     }
 
-                    (Ordering::Greater, Ordering::Greater) if self.is_full() => {
-                        if let Some(next_table) = self.next_table_mut() {
-                            next_table.insert(new_region)
-                        } else {
-                            todo!("allocate next table")
-                        }
+                    (false, true) => {
+                        let collapse_at_pre = self.table_mut().get_mut(insert_at - 1).unwrap();
+                        collapse_at_pre.end = region.end;
                     }
 
-                    (Ordering::Greater, Ordering::Greater) => {
-                        let cur_region = self.regions[self.len - 1];
-
-                        if new_region.start == cur_region.end && new_metadata == M::from(cur_region.metadata) {
-                            self.regions[self.len - 1].end = new_region.end;
-                        } else {
-                            self.regions[self.len] = new_region;
-                            self.increment_len_capped();
-                        }
-
-                        Ok(())
+                    (false, false) => {
+                        self.shuffle_up(insert_at);
+                        self.table_mut()[insert_at] = region;
                     }
-
-                    _ => Err(Error::RegionOverlap),
                 }
             }
+
+            None if !self.is_full() => {
+                self.table[self.len()] = region;
+                self.len += 1;
+            }
+
+            None if let Some(next_table) = self.next_table_mut() => {
+                next_table.insert(region);
+            }
+
+            None => {
+                todo!("allocate next table");
+            }
         }
+    }
+
+    fn allocate
+}
+
+impl<M: Metadata> fmt::Debug for RegionTable<M> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Region Table").field(&self.table()).field(&self.next_table()).finish()
     }
 }
 
@@ -230,13 +213,9 @@ impl Metadata for usize {}
 
 #[test]
 pub fn test_push() {
-    use std::time::{Duration, Instant};
-
     let mut table = RegionTable::<usize, 7>::default();
 
-    let start = Instant::now();
-
-    const FACTOR: usize = 1000000;
+    const FACTOR: usize = 24;
     for idx in 0..FACTOR {
         table.insert({
             let mut d = Region::default();
@@ -245,9 +224,8 @@ pub fn test_push() {
 
             d
         });
+
+        println!("Current Table Status:");
+        println!("{:?}", table);
     }
-
-    let end = Instant::now();
-
-    println!("completed in {}ms", end.duration_since(start).as_millis());
 }

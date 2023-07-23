@@ -112,6 +112,7 @@ dependencies = [
  "num_enum",
  "paste",
  "pic_8259",
+ "pmm",
  "port-rs",
  "rand_core",
  "rand_pcg",
@@ -227,6 +228,14 @@ dependencies = [
  "bit_field",
  "bitflags 2.3.3",
  "port-rs",
+]
+
+[[package]]
+name = "pmm"
+version = "0.1.0"
+dependencies = [
+ "error",
+ "libsys",
 ]
 
 [[package]]

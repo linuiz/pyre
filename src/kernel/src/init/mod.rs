@@ -9,6 +9,8 @@ pub mod boot;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use libsys::Address;
 
+use crate::arch::x86_64::registers::debug;
+
 errorgen! {
     #[derive(Debug)]
     pub enum Error {
@@ -42,12 +44,15 @@ pub(super) unsafe extern "C" fn _init() -> ! {
         .map(limine::KernelFileResponse::file)
         .expect("bootloader did not respond to kernel file request");
 
+    debug!("Parsing the kernel command line...");
     params::parse(kernel_file.cmdline());
 
-    // Setup SMP early to ensure the cores are parked in mapped regions.
+    debug!("Initializing early SMP to park cores in mapped memory...");
     setup_smp();
 
+    debug!("Initializing the physical memory manager...");
     crate::mem::alloc::pmm::init(boot::get_memory_map().unwrap()).unwrap();
+    debug!("Parsing the kernel symbol table into memory...");
     crate::panic::symbols::parse(kernel_file).unwrap();
     memory::setup(kernel_file).unwrap();
 
