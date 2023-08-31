@@ -5,7 +5,9 @@
     let_chains,     //#53667 <https://github.com/rust-lang/rust/issues/53667>
 )]
 
-use core::{fmt, marker::PhantomData, mem::size_of, ops::Range, ptr::NonNull, convert::Infallible};
+use core::{fmt, marker::PhantomData, mem::size_of, ops::Range, ptr::NonNull, };
+
+use libsys::{Address, Frame};
 
 pub trait Metadata: Default + Clone + Copy + PartialEq + Eq + From<usize> + Into<usize> {
     fn is_usable(&self) -> bool;
@@ -34,6 +36,11 @@ impl<M: Metadata> Region<M> {
     }
 
     #[inline]
+    pub const fn size(&self) -> usize {
+        self.end - self.start
+    }
+
+    #[inline]
     pub fn metadata(&self) -> M {
         M::from(self.metadata)
     }
@@ -45,11 +52,12 @@ impl<M: Metadata> fmt::Debug for Region<M> {
     }
 }
 
-const REGION_TABLE_SIZE: usize = (libsys::page_size() / core::mem::size_of::<Region<usize>>()) - 1;
+const MAX_TABLE_SIZE: usize = (libsys::page_size() / core::mem::size_of::<Region<usize>>()) - 1;
+const MAX_TABLE_INDEX: usize = MAX_TABLE_SIZE - 1;
 
 #[repr(C)]
-pub struct RegionTable<M: Metadata> {
-    table: [Region<M>; REGION_TABLE_SIZE],
+pub struct FrameTable<M: Metadata> {
+    table: [Region<M>; MAX_TABLE_SIZE],
 
     /* These two fields should be the same total size as a `Region<M>` */
     len: usize,
@@ -57,13 +65,13 @@ pub struct RegionTable<M: Metadata> {
     phantom: PhantomData<M>,
 }
 
-impl<M: Metadata> Default for RegionTable<M> {
+impl<M: Metadata> Default for FrameTable<M> {
     fn default() -> Self {
-        Self { table: [Region::default(); REGION_TABLE_SIZE], len: 0, next_table_ptr: None, phantom: PhantomData }
+        Self { table: [Region::default(); MAX_TABLE_SIZE], len: 0, next_table_ptr: None, phantom: PhantomData }
     }
 }
 
-impl<M: Metadata> RegionTable<M> {
+impl<M: Metadata> FrameTable<M> {
     #[inline]
     pub const fn len(&self) -> usize {
         self.len
@@ -71,7 +79,7 @@ impl<M: Metadata> RegionTable<M> {
 
     #[inline]
     pub const fn is_full(&self) -> bool {
-        self.len() == REGION_TABLE_SIZE
+        self.len() == MAX_TABLE_SIZE
     }
 
     #[inline]
@@ -106,20 +114,22 @@ impl<M: Metadata> RegionTable<M> {
     fn shuffle_down(&mut self, index: usize) {
         assert!(index < self.len());
 
-        unsafe {
-            let copy_from = self.table.as_ptr().add(index);
-            let copy_to = copy_from.sub(1).cast_mut();
-            let copy_count = self.table().len() - index;
-            core::ptr::copy(copy_from, copy_to, copy_count);
-        }
 
-        if let Some(_next_table) = self.next_table_mut() {
-            todo!(
-                "
-                1. shuffle first item from next table
-                2. check if we need to deallocate the next table
-                "
-            );
+        // Shuffle all the elements down by 1.
+        self.table_mut().copy_within(index.., index - 1);
+
+        if let Some(next_table) = self.next_table_mut() {
+            if let Some(shuffle_region) = next_table.table().first() {
+                self.table_mut()[MAX_TABLE_INDEX] = shuffle_region;
+            }
+
+            // Deallocate the next table only when the table after the next is also empty.
+            //
+            // This keeps a buffer table on hand to ensure we aren't allocating and deallocating
+            // a new table every time we shuffle up or down when full.
+            if next_table.is_empty() && next_table.next_table().is_some() {
+                todo!("deallocate table only if next table's next table is emtpy (keep 1 buffer table)")
+            }
         } else {
             self.len -= 1;
         }
@@ -130,22 +140,20 @@ impl<M: Metadata> RegionTable<M> {
         assert!(index < self.len);
 
         if self.is_full() {
-            todo!(
-                "
-                1. allocate a new table
-                2. place last item into next table
-                "
-            )
+            if self.next_table().is_none() {
+                todo!("allocate next table")
+            }
+
+            if let Some(next_table) = self.next_table_mut() {
+                next_table.shuffle_up(0);
+                next_table.table[0] =  self.table()[MAX_TABLE_INDEX];
+            }
         } else {
             self.len += 1;
         }
 
-        unsafe {
-            let copy_from = self.table.as_ptr().add(index);
-            let copy_to = copy_from.add(1).cast_mut();
-            let copy_count = self.table().len() - index;
-            core::ptr::copy(copy_from, copy_to, copy_count);
-        }
+        // Shuffle all the elements up by 1.
+        self.table_mut().copy_within(index.., index);
     }
 
     pub fn insert(&mut self, region: Region<M>) {
@@ -199,10 +207,16 @@ impl<M: Metadata> RegionTable<M> {
         }
     }
 
-    fn allocate
+    fn next_frame(&mut self) -> Result<Address<Frame>> {
+        let Some(fit_region) = self.table().iter().position(|region| region.size)
+    }
+
+    fn allocate_next_table() {
+        
+    }
 }
 
-impl<M: Metadata> fmt::Debug for RegionTable<M> {
+impl<M: Metadata> fmt::Debug for FrameTable<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Region Table").field(&self.table()).field(&self.next_table()).finish()
     }
@@ -213,7 +227,7 @@ impl Metadata for usize {}
 
 #[test]
 pub fn test_push() {
-    let mut table = RegionTable::<usize, 7>::default();
+    let mut table = FrameTable::<usize, 7>::default();
 
     const FACTOR: usize = 24;
     for idx in 0..FACTOR {
