@@ -9,8 +9,6 @@ pub mod boot;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use libsys::Address;
 
-use crate::arch::x86_64::registers::debug;
-
 errorgen! {
     #[derive(Debug)]
     pub enum Error {

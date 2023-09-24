@@ -11,7 +11,7 @@ msr = { path = "../shared/msr/" }
 libsys = { path = "../shared/libsys/" }
 libkernel = { path = "../shared/libkernel/" }
 error = { path = "../shared/error/" }
-pmm = { path = "../shared/pmm/" }
+#pmm = { path = "../shared/pmm/" }
 # remote crates
 acpi = { git = "https://github.com/linuiz-project/acpi", default-features = false, features = [
     "allocator_api",

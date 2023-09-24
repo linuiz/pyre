@@ -1,17 +1,12 @@
-pub mod eternal;
-// pub mod pmm;
+pub mod pmm;
 
 use alloc::alloc::Global;
 use core::{
     alloc::{AllocError, Allocator, Layout},
     ptr::NonNull,
 };
-use spin::Lazy;
 
-pub type KernelAllocator = pmm::PhysicalAllocator;
-
-// TODO decide if we even need this? Perhaps just rely on the PMM for *all* allocations.
-pub static KMALLOC: Lazy<KernelAllocator> = Lazy::new(pmm::get);
+pub static KMALLOC: spin::Lazy<&'static pmm::PhysicalMemoryManager> = spin::Lazy::new(pmm::get);
 
 mod global_allocator_impl {
     use super::KMALLOC;

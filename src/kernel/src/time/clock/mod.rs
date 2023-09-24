@@ -1,13 +1,12 @@
 pub mod arch;
 
-use crate::mem::alloc::eternal::EternalAllocator;
 use alloc::boxed::Box;
 use core::time::Duration;
 
 static INITIAL_TIMESTAMP: spin::Once<u64> = spin::Once::new();
 
 pub fn set_initial_timestamp() {
-    assert!(INITIAL_TIMESTAMP.get().is_none(), "initial timestamp already set");
+    debug_assert!(INITIAL_TIMESTAMP.get().is_none(), "initial timestamp already set");
 
     INITIAL_TIMESTAMP.call_once(|| SYSTEM.get_timestamp());
 }
@@ -38,12 +37,8 @@ impl Instant {
     }
 }
 
-pub static SYSTEM: spin::Lazy<Box<dyn Clock, EternalAllocator>> = spin::Lazy::new(|| {
-    crate::interrupts::without(|| {
-        let acpi_clock = arch::x86_64::Acpi::load().unwrap();
-        Box::new_in(acpi_clock, EternalAllocator)
-    })
-});
+pub static SYSTEM: spin::Lazy<Box<dyn Clock>> =
+    spin::Lazy::new(|| crate::interrupts::without(|| Box::new(arch::x86_64::Acpi::load().unwrap())));
 
 pub trait Clock: Send + Sync {
     fn frequency(&self) -> u64;

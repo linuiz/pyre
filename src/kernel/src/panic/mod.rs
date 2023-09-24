@@ -41,23 +41,7 @@ impl Iterator for StackTracer {
 /// This function should *never* panic or abort.
 #[panic_handler]
 fn panic(panic_info: &core::panic::PanicInfo) -> ! {
-    use spin::{Lazy, Mutex};
-
-    static TRACE_BUILDER: Lazy<Mutex<String>> = Lazy::new(|| {
-        use crate::mem::alloc::eternal::EternalAllocator;
-        use alloc::boxed::Box;
-
-        // Safety: Memory is properly initialized by allocator, and leaked into a `String` with the same capacity.
-        unsafe {
-            const PANIC_STR_BUFFER_LEN: usize = 0x2000;
-
-            let alloc = Box::<[u8], EternalAllocator>::new_zeroed_slice_in(PANIC_STR_BUFFER_LEN, EternalAllocator)
-                .assume_init();
-            let string = String::from_raw_parts(Box::leak(alloc).as_mut_ptr(), 0, PANIC_STR_BUFFER_LEN);
-
-            Mutex::new(string)
-        }
-    });
+    static TRACE_BUILDER: spin::Mutex<String> = spin::Mutex::new(String::new());
 
     let mut trace_builder = TRACE_BUILDER.lock();
 
