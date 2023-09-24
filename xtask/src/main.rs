@@ -196,18 +196,32 @@ fn download_ovmf_binaries(sh: &Shell, tmp_dir: &TempDir) -> Result<()> {
     let archive_stream = BufReader::new(archive_decompressed.as_slice());
     let mut archive = tar::Archive::new(archive_stream);
 
-    for entry in archive.entries()? {
+    'o: for entry in archive.entries()? {
         let mut entry = entry?;
         let path = entry.path()?.to_string_lossy().into_owned();
 
-        if path.ends_with("x64/code.fd") {
-            entry.unpack(X86_64_CODE)?;
-        } else if path.ends_with("x64/vars.fd") {
-            entry.unpack(X86_64_VARS)?;
-        } else if path.ends_with("aarch64/code.fd") {
-            entry.unpack(AARCH64_CODE)?;
-        } else if path.ends_with("aarch64/vars.fd") {
-            entry.unpack(AARCH64_VARS)?;
+        let mut retries = 0;
+        while let Err(err) = {
+            if path.ends_with("x64/code.fd") {
+                entry.unpack(X86_64_CODE)
+            } else if path.ends_with("x64/vars.fd") {
+                entry.unpack(X86_64_VARS)
+            } else if path.ends_with("aarch64/code.fd") {
+                entry.unpack(AARCH64_CODE)
+            } else if path.ends_with("aarch64/vars.fd") {
+                entry.unpack(AARCH64_VARS)
+            } else {
+                continue 'o;
+            }
+        } {
+            if retries < 5 {
+                retries += 1;
+                println!("Error: {err} (retrying in 1 second...)");
+                std::thread::sleep(std::time::Duration::from_millis(1000));
+            } else {
+                println!("Error: {err} (not retrying)");
+                return Err(anyhow::anyhow!(err));
+            }
         }
     }
 

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::ValueEnum;
 use xshell::cmd;
 
